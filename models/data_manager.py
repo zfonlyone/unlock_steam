@@ -18,22 +18,58 @@ class DataManager:
             data_file: 数据文件的路径
         """
         self.data_file = data_file
+        
+        # 标准化的数据结构模板
+        self.default_data_structure = {
+            "games": {},  # 游戏数据字典，以AppID为键
+            "last_update": datetime.datetime.now().isoformat()  # 上次更新时间
+        }
+        
+        # 是否是首次创建
+        is_first_creation = not os.path.exists(self.data_file)
+        
+        # 加载或创建数据
         self.games_data = self._load_data()
         
         # 验证并修复数据文件
         self._validate_and_repair_data()
+        
+        # 如果数据文件不存在，创建一个标准格式的空数据文件
+        if is_first_creation:
+            # 添加示例记录，帮助用户理解数据格式
+            if len(self.games_data.get("games", {})) == 0:
+                # 添加两个示例游戏（知名游戏）
+                self.update_game("730", "default", "免费无需解锁Counter-Strike 2", False, auto_save=False)
+                self.update_game("570", "default", "免费无需解锁Dota 2", False, auto_save=False)
+                
+            # 保存到文件
+            self.save_data(silent=True)
+            
+            print(f"创建了新的数据文件: {self.data_file}")
+        
+        # 始终保存一次，确保文件格式正确
+        else:
+            self.save_data(silent=True)
     
     def _validate_and_repair_data(self):
         """验证并修复数据文件，确保数据完整性"""
         try:
-            # 检查游戏数据结构是否完整
-            if "games" not in self.games_data:
-                self.games_data["games"] = {}
-                
-            if "last_update" not in self.games_data:
+            # 确保数据结构包含所有必要的字段
+            for key, value in self.default_data_structure.items():
+                if key not in self.games_data:
+                    self.games_data[key] = copy.deepcopy(value)
+            
+            # 确保上次更新时间字段是有效的
+            if not isinstance(self.games_data.get("last_update"), str):
                 self.games_data["last_update"] = datetime.datetime.now().isoformat()
+            
+            # 确保games字段是字典类型
+            if not isinstance(self.games_data.get("games"), dict):
+                self.games_data["games"] = {}
         except Exception as e:
             print(f"数据验证错误: {e}")
+            # 如果验证过程中出现错误，使用默认数据结构
+            self.games_data = dict(self.default_data_structure)
     
     def _load_data(self) -> Dict[str, Any]:
         """从本地文件加载数据
@@ -42,8 +78,8 @@ class DataManager:
             游戏数据字典
         """
         if not os.path.exists(self.data_file):
-            # 如果文件不存在，返回空字典
-            return {"games": {}, "last_update": datetime.datetime.now().isoformat()}
+            # 如果文件不存在，返回默认的数据结构
+            return dict(self.default_data_structure)
             
         try:
             with open(self.data_file, "r", encoding="utf-8") as f:
@@ -53,7 +89,7 @@ class DataManager:
             return self._repair_json_file(self.data_file, e)
         except Exception as e:
             print(f"加载数据错误: {e}")
-            return {"games": {}, "last_update": datetime.datetime.now().isoformat()}
+            return dict(self.default_data_structure)
     
     def _repair_json_file(self, file_path: str, error: json.JSONDecodeError) -> Dict[str, Any]:
         """尝试修复损坏的JSON文件
@@ -63,40 +99,38 @@ class DataManager:
             error: JSON解析错误
             
         Returns:
-            修复后的数据字典
+            修复后的数据或默认数据
         """
-        # 创建备份
-        backup_path = f"{file_path}.bak"
-        try:
-            shutil.copy2(file_path, backup_path)
-            print(f"已创建数据文件备份: {backup_path}")
-        except Exception as e:
-            print(f"创建备份失败: {e}")
+        print(f"尝试修复损坏的JSON文件: {file_path}, 错误: {error}")
         
-        # 尝试修复方法1: 忽略错误行
+        # 方法1: 尝试使用错误位置之前的内容
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
                 
-            lines = content.split("\n")
-            error_line = error.lineno - 1
-            
-            # 移除可能导致错误的行
-            if 0 <= error_line < len(lines):
-                print(f"尝试修复: 移除第{error_line + 1}行")
-                del lines[error_line]
-                
-                # 写入修复后的内容
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(lines))
-                    
-                # 重新加载
-                with open(file_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+            # 截取错误位置之前的部分
+            valid_part = content[:error.pos]
+            # 尝试找到最后一个完整的JSON对象
+            last_brace_idx = valid_part.rfind("}")
+            if last_brace_idx > 0:
+                valid_part = valid_part[:last_brace_idx + 1]
+                # 尝试解析
+                try:
+                    data = json.loads(valid_part)
+                    # 确保结果是字典并包含必要的字段
+                    if isinstance(data, dict):
+                        result = dict(self.default_data_structure)
+                        # 合并有效的字段
+                        for key, value in data.items():
+                            if key in result:
+                                result[key] = value
+                        return result
+                except:
+                    pass
         except Exception as e:
             print(f"修复方法1失败: {e}")
         
-        # 尝试修复方法2: 提取有效的JSON部分
+        # 方法2: 尝试读取最后一个有效的JSON结构
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -107,15 +141,23 @@ class DataManager:
                 valid_part = content[:last_brace_pos + 1]
                 # 尝试解析
                 try:
-                    return json.loads(valid_part)
+                    data = json.loads(valid_part)
+                    # 确保结果是字典并包含必要的字段
+                    if isinstance(data, dict):
+                        result = dict(self.default_data_structure)
+                        # 合并有效的字段
+                        for key, value in data.items():
+                            if key in result:
+                                result[key] = value
+                        return result
                 except Exception:
                     pass
         except Exception as e:
             print(f"修复方法2失败: {e}")
         
-        # 如果所有修复方法都失败，返回空数据
-        print("无法修复数据文件，使用空数据")
-        return {"games": {}, "last_update": datetime.datetime.now().isoformat()}
+        # 如果所有修复方法都失败，返回默认数据结构
+        print("无法修复数据文件，使用默认数据结构")
+        return dict(self.default_data_structure)
         
     def save_data(self, silent: bool = False) -> bool:
         """保存数据到本地文件
@@ -173,8 +215,17 @@ class DataManager:
         if "games" not in self.games_data:
             self.games_data["games"] = {}
             
-        # 获取现有游戏数据或创建新的
-        game = self.games_data["games"].get(app_id, {})
+        # 获取现有游戏数据或创建新的标准游戏数据结构
+        game = self.games_data["games"].get(app_id, {
+            "app_id": app_id,
+            "game_name": "",
+            "databases": [],
+            "is_unlocked": False,
+            "last_updated": datetime.datetime.now().isoformat()
+        })
+        
+        # 确保app_id字段存在（冗余存储，方便查询）
+        game["app_id"] = app_id
         
         # 更新数据库名称
         databases = game.get("databases", [])
@@ -198,6 +249,9 @@ class DataManager:
         # 更新解锁状态
         if is_unlocked is not None:
             game["is_unlocked"] = is_unlocked
+        
+        # 更新最后修改时间
+        game["last_updated"] = datetime.datetime.now().isoformat()
             
         # 存储更新后的游戏数据
         self.games_data["games"][app_id] = game

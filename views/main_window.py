@@ -245,6 +245,10 @@ class MainWindow(QMainWindow):
         """更新游戏表格"""
         self.game_table.setRowCount(0)  # 清空表格
         
+        # 即使没有游戏数据，也启用功能按钮（尤其是更新列表按钮）
+        self.enable_buttons(True)
+        
+        # 如果没有游戏数据，直接返回，保持表格为空
         if not games:
             return
         
@@ -266,9 +270,6 @@ class MainWindow(QMainWindow):
                     item = self.game_table.item(i, col)
                     if item:
                         item.setBackground(QColor(200, 255, 200))  # 浅绿色
-        
-        # 启用功能按钮
-        self.enable_buttons(True)
         
         # 更新状态栏
         self.set_status(f"显示 {len(games)} 个游戏")

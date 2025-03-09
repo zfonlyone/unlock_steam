@@ -16,7 +16,8 @@ class GitModel:
             repo_path: Git仓库路径
             cache_file: 分支缓存文件路径
         """
-        self.repo_path = repo_path
+        # 标准化仓库路径
+        self.repo_path = os.path.normpath(repo_path) if repo_path else ""
         self.cache_file = cache_file
     
     def is_valid_repo(self) -> bool:
@@ -25,7 +26,12 @@ class GitModel:
         Returns:
             是否是有效的Git仓库
         """
-        return os.path.exists(os.path.join(self.repo_path, ".git"))
+        if not self.repo_path:
+            return False
+            
+        # 使用标准化路径检查.git目录
+        git_dir = os.path.join(self.repo_path, ".git")
+        return os.path.exists(git_dir)
     
     def _load_cache(self) -> Dict[str, Any]:
         """加载缓存数据

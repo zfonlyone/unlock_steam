@@ -64,4 +64,9 @@ class SearchController:
         """刷新显示，从内存中加载数据但不改变数据"""
         all_games = self.model.get_all_games()
         self.view.update_table(all_games)
-        self.view.set_status(f"显示 {len(all_games)} 个游戏") 
+        
+        # 更新状态栏
+        if all_games:
+            self.view.set_status(f"显示 {len(all_games)} 个游戏") 
+        else:
+            self.view.set_status("游戏列表为空，请点击'更新列表'按钮获取游戏数据") 

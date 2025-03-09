@@ -68,16 +68,22 @@ class App:
             self.show_config_dialog()
             return
         
-        # 如果本地数据文件存在，加载数据
-        if os.path.exists(self.data_manager.data_file):
-            games = self.data_manager.get_all_games()
-            self.main_window.update_table(games)
+        # 初始化数据
+        games = self.data_manager.get_all_games()
+        
+        # 更新表格，即使没有游戏数据
+        self.main_window.update_table(games)
+        
+        # 设置状态
+        if games:
             self.main_window.set_status(f"已加载 {len(games)} 个游戏")
         else:
+            # 如果没有游戏数据，显示提示信息
+            self.main_window.set_status("没有游戏数据，请点击'更新列表'按钮从仓库获取数据")
             QMessageBox.information(
                 self.main_window,
                 "提示",
-                "未找到本地数据文件，请点击'更新列表'按钮从仓库获取数据。"
+                "没有游戏数据，请点击'更新列表'按钮从仓库获取数据，然后点击'刷新显示'按钮查看更新后的数据。"
             )
     
     def show_config_dialog(self):
@@ -98,9 +104,20 @@ class App:
         
         # 保存配置
         if self.config_model.save_config():
-            # 重新初始化依赖配置的组件
+            # 重新初始化依赖配置的模型组件
             self.unlock_model = UnlockModel(self.config_model.get_config())
             self.git_model = GitModel(self.config_model.get("manifest_repo_path", ""))
+            
+            # 更新控制器引用的模型
+            # 注意：GitController保存的仍然是原始配置模型的引用，但内容已更新
+            self.git_controller.git_model = self.git_model
+            
+            # 显示成功提示
+            QMessageBox.information(
+                self.main_window,
+                "配置保存成功",
+                "配置已保存。您现在可以点击'更新列表'按钮获取游戏数据。"
+            )
             
             # 重新加载数据
             self.load_initial_data()

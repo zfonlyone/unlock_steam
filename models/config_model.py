@@ -95,8 +95,15 @@ class ConfigModel:
         steam_path = self.get("steam_path", "")
         repo_path = self.get("manifest_repo_path", "")
         
+        # 标准化路径
+        steam_path = os.path.normpath(steam_path)
+        repo_path = os.path.normpath(repo_path)
+        
+        # 检查Git目录使用标准化的路径
+        git_dir = os.path.join(repo_path, ".git")
+        
         return (
             os.path.exists(steam_path) and 
             os.path.exists(repo_path) and 
-            os.path.exists(os.path.join(repo_path, ".git"))
+            os.path.exists(git_dir)
         ) 

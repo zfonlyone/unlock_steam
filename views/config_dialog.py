@@ -91,7 +91,9 @@ class ConfigDialog(QDialog):
             self, "选择Steam安装目录", self.steam_path_edit.text()
         )
         if path:
-            self.steam_path_edit.setText(path.replace('/', os.sep))
+            # 标准化路径格式
+            path = os.path.normpath(path)
+            self.steam_path_edit.setText(path)
     
     def browse_repo_path(self):
         """浏览并选择清单仓库路径"""
@@ -99,12 +101,18 @@ class ConfigDialog(QDialog):
             self, "选择清单仓库目录", self.repo_path_edit.text()
         )
         if path:
-            self.repo_path_edit.setText(path.replace('/', os.sep))
+            # 标准化路径格式
+            path = os.path.normpath(path)
+            self.repo_path_edit.setText(path)
     
     def save_config(self):
         """保存配置"""
         steam_path = self.steam_path_edit.text().strip()
         repo_path = self.repo_path_edit.text().strip()
+        
+        # 标准化路径格式，确保反斜杠被正确处理
+        steam_path = os.path.normpath(steam_path)
+        repo_path = os.path.normpath(repo_path)
         
         # 验证路径
         if not steam_path:
@@ -137,7 +145,8 @@ class ConfigDialog(QDialog):
                 return
         
         # 检查清单仓库是否为Git仓库
-        if os.path.exists(repo_path) and not os.path.exists(os.path.join(repo_path, ".git")):
+        git_dir = os.path.join(repo_path, ".git")
+        if os.path.exists(repo_path) and not os.path.exists(git_dir):
             result = QMessageBox.warning(
                 self, 
                 "无效仓库", 
