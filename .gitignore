@@ -1,0 +1,85 @@
+# Python缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# 配置文件和个人数据
+config.json
+*.config
+*_config.json
+branch_cache.json
+games_data.json
+*.json.bak
+
+# 临时文件夹和生成的文件
+temp/
+steamunlock_temp/
+*.manifest
+*.vdf
+*.bak
+*.error_*
+*.log
+
+# 个人凭证和敏感信息
+*credentials*
+*password*
+*token*
+*secret*
+*api_key*
+*auth*
+
+# 截图和媒体文件（可能包含个人信息）
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+
+# IDE相关
+.vscode/
+.idea/
+*.swp
+*.swo
+*.iml
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 其他可能包含敏感信息的文件
+*.lua
+
+# 临时脚本和测试文件
+test_*.py
+*_test.py
+*_local.py
+
+# 打包相关文件和目录
+build/
+dist/
+*.spec
+*.manifest
+*.exe
+*.pyc
+*.pyd
+*.pyz
+*.pyw
+*.manifest
+*.spec
+*.pkg
+*.dmg
+*.msi
+*.app/
+node_modules/
+
+# 其他系统文件
+._*
+ehthumbs.db
+$RECYCLE.BIN/ 
