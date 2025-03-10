@@ -17,6 +17,7 @@ class MainWindow(QMainWindow):
     updateListRequested = pyqtSignal()  # 更新列表请求
     contextMenuRequested = pyqtSignal(QPoint, object)  # 右键菜单请求
     configRequested = pyqtSignal()  # 配置请求
+    aboutRequested = pyqtSignal()  # 关于请求
     
     def __init__(self):
         super().__init__()
@@ -231,15 +232,8 @@ class MainWindow(QMainWindow):
     
     def _on_about(self):
         """处理关于请求"""
-        from PyQt5.QtWidgets import QMessageBox
-        QMessageBox.about(
-            self, 
-            "关于Steam游戏解锁器",
-            "Steam游戏解锁器 v1.0\n\n"
-            "本工具用于管理和解锁Steam游戏。\n"
-            "可以帮助您轻松查找、解锁Steam游戏。\n\n"
-            "请遵守当地法律法规使用此工具。"
-        )
+        # 发出关于请求信号，让Controller处理
+        self.aboutRequested.emit()
     
     @pyqtSlot(list)
     def update_table(self, games):

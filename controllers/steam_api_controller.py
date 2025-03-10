@@ -12,7 +12,7 @@ class SteamApiController(QObject):
     fetchCompleted = pyqtSignal(str, str, str)  # app_id, game_name, error_message
     batchFetchCompleted = pyqtSignal(bool, str, int)  # success, message, updated_count
     
-    def __init__(self, steam_api_model, data_model, view):
+    def __init__(self, steam_api_model, data_model, config_model,view):
         """初始化Steam API控制器
         
         Args:
@@ -23,6 +23,7 @@ class SteamApiController(QObject):
         super().__init__()
         self.steam_api_model = steam_api_model
         self.data_model = data_model
+        self.config_model = config_model
         self.view = view
         
         # 取消标志
@@ -56,20 +57,19 @@ class SteamApiController(QObject):
 
                 # 更新游戏数据
                 self.data_model.update_game(
-                    app_id,
-                    database_name,
-                    result,  # 游戏名称
-                    is_unlocked,
+                    app_id=app_id,
+                    database_name=database_name,
+                    game_name=result,  # 游戏名称
                     auto_save=True
                 )
 
                 # 发送完成信号
-                self.fetchCompleted.emit(app_id, result, "")
+                self.view.set_status(f"获取成功，更新数据...")
             else:
-
                 # 发送完成信号
-                self.fetchCompleted.emit(app_id, "", result)
-
+                self.view.set_status(f"获取失败，请检查网络连接...")
+            
+            self.view.update_table(self.data_model.get_all_games())
         except Exception as e:
             # 处理异常
             print(f"获取游戏名称异常: {e}")
@@ -115,50 +115,30 @@ class SteamApiController(QObject):
         if result != QMessageBox.Yes:
             return
         
-        # 创建进度对话框
-        progress_dialog = QProgressDialog(
-            f"正在获取游戏名称... (0/{len(app_ids)})",
-            "取消",
-            0,
-            len(app_ids),
-            self.view
-        )
-        progress_dialog.setWindowTitle("批量获取游戏名称")
-        progress_dialog.setWindowModality(Qt.WindowModal)
-        progress_dialog.show()
+        # 重置UI状态的函数
+        def reset_ui():
+            # 重置UI状态
+            self.view.set_status("就绪")
+            
+        # 显示进度信息
+        self.view.set_status(f"正在获取游戏名称... (0/{len(app_ids)})")
+        
         
         # 设置取消处理
-        self.cancel_batch = False
-        progress_dialog.canceled.connect(lambda: setattr(self, 'cancel_batch', True))
-        
-        # 禁用按钮
-        self.view.enable_buttons(False)
         
         # 完成标志
         batch_completed = False
         
-        # UI重置函数
-        def reset_ui():
-            """恢复UI状态"""
-            try:
-                progress_dialog.close()
-                self.view.enable_buttons(True)
-                QApplication.processEvents()
-            except Exception as e:
-                print(f"UI重置失败: {e}")
         
         # 批量获取回调函数
         def batch_callback(app_id, success, name, progress, total):
             """批量获取的回调处理"""
             # 检查是否取消
-            if self.cancel_batch:
-                return False
-            
-            # 更新进度
-            QTimer.singleShot(0, lambda: progress_dialog.setValue(progress))
-            QTimer.singleShot(0, lambda: progress_dialog.setLabelText(
-                f"正在获取游戏名称... ({progress}/{total})"
-            ))
+
+
+            # 更新进度信息
+            progress_msg = f"正在获取游戏名称... ({progress}/{total})"
+            self.view.set_status(progress_msg)
             
             # 如果成功获取，更新数据库
             if success:
@@ -177,16 +157,15 @@ class SteamApiController(QObject):
                 if force or not current_name or current_name.startswith("Game "):
                     # 更新数据
                     self.data_model.update_game(
-                        app_id,
-                        database_name,
-                        name,
-                        is_unlocked,
-                        auto_save=False  # 批量操作不立即保存
+                        app_id=app_id,
+                        database_name=database_name,
+                        game_name=name,
+                        auto_save=True  
                     )
                     # 每10个游戏刷新一次表格
                     if progress % 10 == 0 or progress == total:
-                        QTimer.singleShot(0, lambda: self.view.update_table(self.data_model.get_all_games()))
-                    
+                        all_games = self.data_model.get_all_games()
+                        self.view.update_table(all_games)
                     return True  # 表示已更新
             
             return False  # 表示未更新
@@ -211,25 +190,18 @@ class SteamApiController(QObject):
                 # 更新UI
                 def finish_batch():
                     try:
-                        # 关闭进度对话框
-                        progress_dialog.close()
+
                         # 更新状态
                         self.view.set_status(f"批量获取完成: 处理了 {len(app_ids)} 个游戏，更新了 {updated_count} 个名称")
                         # 刷新表格
-                        self.view.update_table(self.data_model.get_all_games())
-                        # 启用按钮
-                        self.view.enable_buttons(True)
+                        all_games = self.data_model.get_all_games()
+                        self.view.update_table(all_games)
                         # 通知完成
-                        QMessageBox.information(
-                            self.view,
-                            "批量获取完成",
-                            f"已完成 {len(app_ids)} 个游戏的名称获取，成功更新 {updated_count} 个名称。"
-                        )
+
                     except Exception as e:
                         print(f"完成UI更新失败: {e}")
                         reset_ui()
                 
-                QTimer.singleShot(0, finish_batch)
                 
                 # 发送批量完成信号
                 self.batchFetchCompleted.emit(True, f"已更新 {updated_count} 个游戏名称", updated_count)
@@ -237,10 +209,6 @@ class SteamApiController(QObject):
             except Exception as e:
                 # 处理异常
                 print(f"批量获取异常: {e}")
-                
-                # 恢复UI
-                QTimer.singleShot(0, lambda: self.view.set_status(f"批量获取名称失败: {str(e)}"))
-                QTimer.singleShot(0, reset_ui)
                 
                 # 发送批量完成信号
                 self.batchFetchCompleted.emit(False, str(e), 0)
@@ -253,6 +221,7 @@ class SteamApiController(QObject):
         batch_thread = threading.Thread(target=batch_worker)
         batch_thread.daemon = True
         batch_thread.start()
+
     
     def open_store_page(self, app_id: str):
         """打开Steam商店页面
@@ -263,3 +232,42 @@ class SteamApiController(QObject):
         import webbrowser
         url = f"https://store.steampowered.com/app/{app_id}/"
         webbrowser.open(url) 
+    
+    
+    def run_game(self, app_id: str):
+        """运行游戏
+        
+        Args:
+            app_id: 游戏AppID
+        """
+        try:
+            # 获取Steam路径
+            steam_path = self.config_model.get("steam_path", "")
+            if not steam_path:
+                QMessageBox.warning(
+                    self.view,
+                    "运行游戏失败",
+                    "未配置Steam路径"
+                )
+                return
+            
+            # 启动游戏
+            import subprocess
+            import os
+            
+            # 构建Steam运行命令
+            run_command = f'"{os.path.join(steam_path, "steam.exe")}" -applaunch {app_id}'
+            
+            # 执行命令
+            subprocess.Popen(run_command, shell=True)
+            
+            # 显示提示
+            self.view.set_status(f"已启动游戏 {app_id}")
+        except Exception as e:
+            # 显示错误
+            QMessageBox.warning(
+                self.view,
+                "运行游戏失败",
+                f"启动游戏 {app_id} 时发生错误: {str(e)}"
+            )
+    

@@ -8,6 +8,7 @@ from PyQt5.QtCore import QTimer, Qt
 # 导入MVC组件
 from models import DataManager, UnlockModel, GitModel, ConfigModel
 from models.steam_api_model import SteamApiModel
+from models.project_info import project_info
 from views import MainWindow, ConfigDialog
 from controllers import SearchController, UnlockController, GitController, SteamApiController
 from controllers.menu_manager import MenuManager
@@ -19,6 +20,9 @@ class App:
     """应用程序类，负责初始化和协调MVC组件"""
     
     def __init__(self):
+        # 先验证项目完整性
+        self.verify_project_integrity()
+        
         # 创建配置模型
         self.config_model = ConfigModel()
         
@@ -40,6 +44,9 @@ class App:
         # 连接配置请求信号
         self.main_window.configRequested.connect(self.show_config_dialog)
         
+        # 连接关于请求信号
+        self.main_window.aboutRequested.connect(self.show_about_dialog)
+        
         # 创建控制器组件
         self.search_controller = SearchController(self.data_manager, self.main_window)
         self.unlock_controller = UnlockController(self.data_manager, self.unlock_model, self.config_model, self.main_window)
@@ -48,6 +55,7 @@ class App:
         self.steam_api_controller = SteamApiController(
             steam_api_model=self.steam_api_model,
             data_model=self.data_manager,
+            config_model=self.config_model,
             view=self.main_window
         )
         
@@ -69,6 +77,18 @@ class App:
         
         # 延迟加载数据
         QTimer.singleShot(100, self.load_initial_data)
+    
+    def verify_project_integrity(self):
+        """验证项目完整性，防止被篡改"""
+        # 如果检测到篡改，显示警告并退出
+        if project_info.detect_runtime_tampering():
+            QMessageBox.critical(
+                None,
+                "安全警告",
+                "程序文件已被篡改或损坏，为保证安全，程序将退出。\n"
+                "请重新下载原版程序。"
+            )
+            sys.exit(1)
     
     def start_ui_guardian(self):
         """启动UI守护线程，确保UI不会卡死"""
@@ -182,8 +202,21 @@ class App:
                 "配置保存失败，请检查文件权限。"
             )
     
+    def show_about_dialog(self):
+        """显示关于对话框"""
+        QMessageBox.about(
+            self.main_window,
+            f"关于 {project_info.get_app_name()}",
+            project_info.get_about_info()
+        )
+    
     def run(self):
         """运行应用程序"""
+        # 添加版本信息到窗口标题
+        app_title = f"{project_info.get_app_name()} v{project_info.get_version()}"
+        self.main_window.setWindowTitle(app_title)
+        
+        # 显示主窗口
         self.main_window.show()
 
 def main():

@@ -39,8 +39,20 @@ class DataManager:
             # 添加示例记录，帮助用户理解数据格式
             if len(self.games_data.get("games", {})) == 0:
                 # 添加两个示例游戏（知名游戏）
-                self.update_game("730", "default", "免费无需解锁Counter-Strike 2", False, auto_save=False)
-                self.update_game("570", "default", "免费无需解锁Dota 2", False, auto_save=False)
+                self.update_game(
+                    app_id="730", 
+                    database_name="default", 
+                    game_name="免费无需解锁Counter-Strike 2", 
+                    is_unlocked=False, 
+                    auto_save=False
+                )
+                self.update_game(
+                    app_id="570", 
+                    database_name="default", 
+                    game_name="免费无需解锁Dota 2", 
+                    is_unlocked=False, 
+                    auto_save=False
+                )
                 
             # 保存到文件
             self.save_data(silent=True)
@@ -173,9 +185,6 @@ class DataManager:
             self.games_data["last_update"] = datetime.datetime.now().isoformat()
             
             # 打印调试信息
-            if not silent:
-                print(f"正在保存数据到 {self.data_file}...")
-                print(f"数据包含 {len(self.games_data.get('games', {}))} 个游戏条目")
             
             # 先写入临时文件
             temp_file = f"{self.data_file}.tmp"
@@ -189,8 +198,7 @@ class DataManager:
                 backup_file = f"{self.data_file}.bak"
                 try:
                     shutil.copy2(self.data_file, backup_file)
-                    if not silent:
-                        print(f"已创建备份文件: {backup_file}")
+
                 except Exception as e:
                     if not silent:
                         print(f"创建备份失败: {e}")
@@ -198,17 +206,7 @@ class DataManager:
             # 替换原文件
             shutil.move(temp_file, self.data_file)
             
-            # 验证文件写入是否成功
-            if os.path.exists(self.data_file):
-                file_size = os.path.getsize(self.data_file)
-                if not silent:
-                    print(f"数据已保存到 {self.data_file}，文件大小: {file_size} 字节")
-                
-                return True
-            else:
-                if not silent:
-                    print(f"保存失败: 文件 {self.data_file} 不存在")
-                return False
+
                 
         except Exception as e:
             if not silent:
@@ -218,16 +216,17 @@ class DataManager:
                 traceback.print_exc()
             return False
     
-    def update_game(self, app_id: str, database_name: str, game_name: Optional[str] = None, 
-                   is_unlocked: bool = None, auto_save: bool = False) -> None:
-        """更新游戏信息
+    def update_game(self, app_id: str, database_name: str = None, game_name: Optional[str] = None, 
+                   is_unlocked: Optional[bool] = None, auto_save: bool = False, **kwargs) -> None:
+        """更新游戏信息，只更新指定的字段
         
         Args:
-            app_id: 游戏的AppID
-            database_name: 数据库名称
+            app_id: 游戏的AppID（必填）
+            database_name: 数据库名称，如果为None则不更新
             game_name: 游戏名称，如果为None则不更新
             is_unlocked: 是否已解锁，如果为None则不更新
             auto_save: 是否自动保存到文件
+            **kwargs: 其他自定义字段
         """
         # 确保games字典存在
         if "games" not in self.games_data:
@@ -245,23 +244,28 @@ class DataManager:
         # 确保app_id字段存在（冗余存储，方便查询）
         game["app_id"] = app_id
         
-        # 更新数据库名称
-        databases = game.get("databases", [])
-        if database_name and database_name not in databases:
-            databases.append(database_name)
-            game["databases"] = databases
+        # 更新数据库名称（如果提供了）
+        if database_name is not None:
+            databases = game.get("databases", [])
+            if database_name and database_name not in databases:
+                databases.append(database_name)
+                game["databases"] = databases
             
-        # 更新游戏名称
+        # 更新游戏名称（如果提供了）
         if game_name is not None and game_name.strip():
-            # 直接更新游戏名称，不检查当前值
             # 打印详细日志用于调试
             old_name = game.get("game_name", "")
             print(f"更新游戏名称 AppID={app_id}: '{old_name}' -> '{game_name}'")
             game["game_name"] = game_name
                 
-        # 更新解锁状态
+        # 更新解锁状态（如果提供了）
         if is_unlocked is not None:
             game["is_unlocked"] = is_unlocked
+            
+        # 更新任何其他自定义字段
+        for key, value in kwargs.items():
+            if value is not None:
+                game[key] = value
             
         # 更新最后修改时间
         game["last_updated"] = datetime.datetime.now().isoformat()
@@ -373,11 +377,12 @@ class DataManager:
             parts = branch_name.split("/")
             database_name = parts[0] if len(parts) > 1 else next(iter(database_names))
             
-            # 默认设置游戏名称为空字符串，方便后续获取真实名称
-            game_name = ""
-            
-            # 更新游戏信息
-            self.update_game(app_id, database_name, game_name, auto_save=False)
+            # 更新游戏信息，只传递需要更新的字段
+            self.update_game(
+                app_id=app_id, 
+                database_name=database_name,
+                auto_save=False
+            )
             updated_count += 1
             
         # 保存数据

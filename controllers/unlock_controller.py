@@ -223,43 +223,39 @@ class UnlockController(QObject):
         thread = threading.Thread(target=run_async_task)
         thread.start()
     
-    def run_game(self, app_id: str):
-        """运行游戏
+    def update_game_name_silently(self, app_id, game_name, force=True):
+        """静默更新游戏名称，不显示消息框
         
         Args:
             app_id: 游戏AppID
+            game_name: 新的游戏名称
+            force: 是否强制更新名称，即使游戏已有名称
         """
-        try:
-            # 获取Steam路径
-            steam_path = self.config_model.get("steam_path", "")
-            if not steam_path:
-                QMessageBox.warning(
-                    self.view,
-                    "运行游戏失败",
-                    "未配置Steam路径"
+        game = self.data_model.get_game(app_id)
+        if game and game_name:
+            # 获取当前名称
+            current_name = game.get("game_name", "")
+            
+            # 判断是否需要更新
+            # 如果force=True，则强制更新
+            # 否则只更新名称为空或默认名称的游戏
+            if force or not current_name or current_name.startswith("Game "):
+                # 获取数据库名称
+                databases = game.get("databases", [])
+                database_name = databases[0] if databases else "default"
+                
+                # 更新游戏名称 - 只传递需要更新的游戏名称
+                self.data_model.update_game(
+                    app_id=app_id,
+                    database_name=database_name,
+                    game_name=game_name,
+                    auto_save=True
                 )
-                return
-            
-            # 启动游戏
-            import subprocess
-            import os
-            
-            # 构建Steam运行命令
-            run_command = f'"{os.path.join(steam_path, "steam.exe")}" -applaunch {app_id}'
-            
-            # 执行命令
-            subprocess.Popen(run_command, shell=True)
-            
-            # 显示提示
-            self.view.set_status(f"已启动游戏 {app_id}")
-        except Exception as e:
-            # 显示错误
-            QMessageBox.warning(
-                self.view,
-                "运行游戏失败",
-                f"启动游戏 {app_id} 时发生错误: {str(e)}"
-            )
-    
+                
+                return True
+        
+        return False
+
     def update_progress(self, message: str, progress: int):
         """更新进度信息
         
@@ -309,7 +305,6 @@ class UnlockController(QObject):
                 message
             )
     
-
     def check_all_unlocked_games(self, show_dialog: bool = False):
         """检查所有游戏的解锁状态（在后台进行，不刷新UI，不显示弹窗）
 
@@ -418,7 +413,6 @@ class UnlockController(QObject):
         thread.daemon = True  # 设置为守护线程，应用退出时自动结束
         thread.start()
 
-
     def update_game_name_silently(self, app_id, game_name, force=True):
         """静默更新游戏名称，不显示消息框
         
@@ -440,12 +434,11 @@ class UnlockController(QObject):
                 databases = game.get("databases", [])
                 database_name = databases[0] if databases else "default"
                 
-                # 更新游戏名称
+                # 更新游戏名称 - 只传递需要更新的游戏名称
                 self.data_model.update_game(
-                    app_id,
-                    database_name,
-                    game_name,
-                    game.get("is_unlocked", False),
+                    app_id=app_id,
+                    database_name=database_name,
+                    game_name=game_name,
                     auto_save=True
                 )
                 
