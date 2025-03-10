@@ -1,13 +1,19 @@
 import sys
 import os
 import json
-from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
+from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import QTimer, Qt
 
 # 导入MVC组件
 from models import DataManager, UnlockModel, GitModel, ConfigModel
+from models.steam_api_model import SteamApiModel
 from views import MainWindow, ConfigDialog
-from controllers import SearchController, UnlockController, GitController
+from controllers import SearchController, UnlockController, GitController, SteamApiController
+from controllers.menu_manager import MenuManager
+
+import threading
+import time
 
 class App:
     """应用程序类，负责初始化和协调MVC组件"""
@@ -25,6 +31,9 @@ class App:
         # 创建Git模型
         self.git_model = GitModel(self.config_model.get("manifest_repo_path", ""))
         
+        # 创建Steam API模型
+        self.steam_api_model = SteamApiModel()
+        
         # 创建视图组件
         self.main_window = MainWindow()
         
@@ -32,27 +41,72 @@ class App:
         self.main_window.configRequested.connect(self.show_config_dialog)
         
         # 创建控制器组件
-        self.search_controller = SearchController(
-            model=self.data_manager,
+        self.search_controller = SearchController(self.data_manager, self.main_window)
+        self.unlock_controller = UnlockController(self.data_manager, self.unlock_model, self.config_model, self.main_window)
+        self.git_controller = GitController(self.data_manager, self.git_model, self.config_model, self.main_window)
+        
+        self.steam_api_controller = SteamApiController(
+            steam_api_model=self.steam_api_model,
+            data_model=self.data_manager,
             view=self.main_window
         )
         
-        self.unlock_controller = UnlockController(
-            data_model=self.data_manager,
-            unlock_model=self.unlock_model,
-            config_model=self.config_model,
-            view=self.main_window
+        # 创建菜单管理器，统一管理右键菜单
+        self.menu_manager = MenuManager(
+            view=self.main_window,
+            unlock_controller=self.unlock_controller,
+            steam_api_controller=self.steam_api_controller
         )
         
-        self.git_controller = GitController(
-            data_model=self.data_manager,
-            git_model=self.git_model,
-            config_model=self.config_model,
-            view=self.main_window
-        )
+        # 连接解锁控制器信号
+        self.unlock_controller.unlockCompleted.connect(self.unlock_controller.handle_unlock_completed)
+        
+        # 连接Steam API控制器信号
+        self.main_window.fetchGameNamesRequested.connect(self.steam_api_controller.fetch_all_game_names)
+        
+        # 启动UI守护线程
+        self.start_ui_guardian()
         
         # 延迟加载数据
         QTimer.singleShot(100, self.load_initial_data)
+    
+    def start_ui_guardian(self):
+        """启动UI守护线程，确保UI不会卡死"""
+        def ui_guardian():
+            last_check_time = time.time()
+            check_interval = 5  # 每5秒检查一次
+            
+            while True:
+                time.sleep(1)  # 每秒检查一次守护条件
+                
+                # 如果主线程已退出，守护线程也应该退出
+                if not threading.main_thread().is_alive():
+                    break
+                
+                # 定期检查UI状态
+                current_time = time.time()
+                if current_time - last_check_time >= check_interval:
+                    last_check_time = current_time
+                    
+                    # 使用QTimer安全地在主线程中执行UI恢复
+                    QTimer.singleShot(0, self.check_and_restore_ui)
+        
+        # 创建并启动UI守护线程
+        guardian = threading.Thread(target=ui_guardian)
+        guardian.daemon = True
+        guardian.start()
+        self.main_window.set_status("UI守护线程已启动")
+    
+    def check_and_restore_ui(self):
+        """检查并恢复UI状态"""
+        try:
+            # 恢复按钮状态
+            self.main_window.enable_buttons(True)
+            # 处理挂起的事件
+            QApplication.processEvents()
+            self.main_window.set_status("UI守护：已检查并恢复UI状态")
+        except Exception as e:
+            self.main_window.set_status(f"UI守护：恢复UI状态失败: {e}")
     
     def load_initial_data(self):
         """加载初始数据"""
@@ -137,8 +191,19 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")  # 设置应用程序风格
     
+    # 显示启动画面
+    splash_pixmap = QPixmap("screenshot.png")
+    splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
+    splash.show()
+    app.processEvents()
+    
     # 创建并运行应用程序
     steam_app = App()
+    
+    # 关闭启动画面，显示主窗口
+    splash.finish(steam_app.main_window)
+    
+    # 运行应用
     steam_app.run()
     
     sys.exit(app.exec_())
