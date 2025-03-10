@@ -35,7 +35,6 @@ steamunlock_temp/
 
 # 截图和媒体文件（可能包含个人信息）
 screenshots/
-*.png
 *.jpg
 *.jpeg
 *.gif

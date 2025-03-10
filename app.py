@@ -95,7 +95,7 @@ class App:
         guardian = threading.Thread(target=ui_guardian)
         guardian.daemon = True
         guardian.start()
-        self.main_window.set_status("UI守护线程已启动")
+        print("UI守护线程已启动")
     
     def check_and_restore_ui(self):
         """检查并恢复UI状态"""
@@ -104,9 +104,9 @@ class App:
             self.main_window.enable_buttons(True)
             # 处理挂起的事件
             QApplication.processEvents()
-            self.main_window.set_status("UI守护：已检查并恢复UI状态")
+            print("UI守护：已检查并恢复UI状态")
         except Exception as e:
-            self.main_window.set_status(f"UI守护：恢复UI状态失败: {e}")
+            print(f"UI守护：恢复UI状态失败: {e}")
     
     def load_initial_data(self):
         """加载初始数据"""
@@ -191,17 +191,12 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")  # 设置应用程序风格
     
-    # 显示启动画面
-    splash_pixmap = QPixmap("screenshot.png")
-    splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
-    splash.show()
-    app.processEvents()
+
     
     # 创建并运行应用程序
     steam_app = App()
     
-    # 关闭启动画面，显示主窗口
-    splash.finish(steam_app.main_window)
+
     
     # 运行应用
     steam_app.run()

@@ -76,7 +76,7 @@ def build_exe():
         "--icon=NONE", # 可以替换为实际的图标文件
         "--clean",     # 清理临时文件
         "--noconfirm", # 不询问确认
-    ] + data_args + ["app1.py"]
+    ] + data_args + ["app.py"]
     
     print("执行命令:", " ".join(cmd))
     subprocess.check_call(cmd)

@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Callable
 import aiofiles
 
 # 导入解锁脚本，假设它已经存在于项目根目录
@@ -63,9 +63,11 @@ class UnlockModel:
         steam_path = self.get_steam_path()
         
         # 检查是否有appid.st文件，这是判断游戏是否解锁的标志
-        st_file = steam_path / "config" / "stplug-in" / f"{app_id}.st"
-        if st_file.exists():
-            return True
+        stplug_dir = steam_path / "config" / "stplug-in"
+        if stplug_dir.exists():
+            st_file = stplug_dir / f"{app_id}.st"
+            if st_file.exists():
+                return True
             
         # 检查GreenLuma AppList目录中是否有对应的文本文件（作为备选方案）
         applist_dir = steam_path / "AppList"
@@ -79,6 +81,17 @@ class UnlockModel:
                     pass
         
         return False
+    
+    async def check_unlock_status_async(self, app_id: str) -> bool:
+        """检查游戏是否已解锁(异步版本)
+        
+        Args:
+            app_id: 游戏的AppID
+            
+        Returns:
+            游戏是否已解锁
+        """
+        return await self.check_unlock_status(app_id)
     
     async def unlock_game(self, app_id: str, database_name: str) -> Tuple[bool, str]:
         """解锁游戏
@@ -198,6 +211,30 @@ class UnlockModel:
                 
         except Exception as e:
             return False, f"解锁过程中出错: {str(e)}"
+            
+    async def unlock_game_async(self, app_id: str, database_name: str, progress_callback: Callable[[str, int], None] = None) -> Tuple[bool, str]:
+        """解锁游戏(异步版本，带进度回调)
+        
+        Args:
+            app_id: 游戏的AppID
+            database_name: 数据库名称
+            progress_callback: 进度回调函数，接收消息和进度百分比
+            
+        Returns:
+            (是否成功, 消息)
+        """
+        # 报告进度：开始解锁
+        if progress_callback:
+            progress_callback("开始解锁游戏...", 10)
+            
+        # 执行解锁
+        result = await self.unlock_game(app_id, database_name)
+        
+        # 报告进度：完成
+        if progress_callback:
+            progress_callback("解锁操作完成", 100)
+            
+        return result
     
     async def remove_unlock(self, app_id: str) -> Tuple[bool, str]:
         """移除游戏解锁
@@ -234,6 +271,29 @@ class UnlockModel:
             
         except Exception as e:
             return False, f"移除解锁时出错: {str(e)}"
+            
+    async def remove_unlock_async(self, app_id: str, progress_callback: Callable[[str, int], None] = None) -> Tuple[bool, str]:
+        """移除游戏解锁(异步版本，带进度回调)
+        
+        Args:
+            app_id: 游戏的AppID
+            progress_callback: 进度回调函数，接收消息和进度百分比
+            
+        Returns:
+            (是否成功, 消息)
+        """
+        # 报告进度：开始移除解锁
+        if progress_callback:
+            progress_callback("开始移除游戏解锁...", 10)
+            
+        # 执行移除解锁
+        result = await self.remove_unlock(app_id)
+        
+        # 报告进度：完成
+        if progress_callback:
+            progress_callback("移除解锁操作完成", 100)
+            
+        return result
     
     async def scan_unlocked_games(self) -> Dict[str, bool]:
         """扫描所有已解锁的游戏
@@ -243,7 +303,6 @@ class UnlockModel:
         """
         unlocked_games = {}
     
-        
         if not self.is_config_valid():
             return unlocked_games
             
@@ -256,7 +315,9 @@ class UnlockModel:
                 app_id = st_file.stem
                 if app_id.isdigit():  # 只处理纯数字的AppID
                     unlocked_games[app_id] = True
-        
+
+        else:
+            print(f"警告: 插件目录不存在 - {plugin_dir}")
         
         # 扫描GreenLuma AppList目录中的txt文件
         applist_dir = steam_path / "AppList"
@@ -268,7 +329,10 @@ class UnlockModel:
                         app_id = content.strip()
                         if app_id.isdigit():  # 只处理纯数字的AppID
                             unlocked_games[app_id] = True
-                except Exception:
+
+                except Exception as e:
+                    print(f"读取GreenLuma文件 {txt_file} 时出错: {e}")
                     continue
         
+        print(f"扫描完成，共发现 {len(unlocked_games)} 个已解锁游戏")
         return unlocked_games 

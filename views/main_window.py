@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QLineEdit, QStatusBar, QMenu, QAction
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, pyqtSlot
 from PyQt5.QtGui import QColor
 
 class MainWindow(QMainWindow):
@@ -24,7 +24,7 @@ class MainWindow(QMainWindow):
         
     def setup_ui(self):
         """设置UI界面"""
-        self.setWindowTitle("Steam解锁文件管理器")
+        self.setWindowTitle("Steam解锁文件管理器1.0 by @zfonlyone")
         self.resize(800, 600)
         
         # 设置应用程序图标和主题色调
@@ -241,6 +241,7 @@ class MainWindow(QMainWindow):
             "请遵守当地法律法规使用此工具。"
         )
     
+    @pyqtSlot(list)
     def update_table(self, games):
         """更新游戏表格"""
         self.game_table.setRowCount(0)  # 清空表格
@@ -274,10 +275,12 @@ class MainWindow(QMainWindow):
         # 更新状态栏
         self.set_status(f"显示 {len(games)} 个游戏")
     
+    @pyqtSlot(str)
     def set_status(self, message):
         """设置状态栏消息"""
         self.status_bar.showMessage(message)
     
+    @pyqtSlot(bool)
     def enable_buttons(self, enabled=True):
         """启用或禁用功能按钮"""
         for i in range(1, 5):  # 除了搜索框外的按钮
