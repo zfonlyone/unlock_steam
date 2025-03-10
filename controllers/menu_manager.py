@@ -63,6 +63,11 @@ class MenuManager(QObject):
         open_store_action.triggered.connect(lambda: self.steam_api_controller.open_store_page(app_id))
         context_menu.addAction(open_store_action)
         
+        # 跳转至库
+        open_library_action = QAction("跳转至库", self.view)
+        open_library_action.triggered.connect(lambda: self.steam_api_controller.open_library_page(app_id))
+        context_menu.addAction(open_library_action)
+        
         # 添加运行游戏菜单项
         run_game_action = QAction("运行游戏", self.view)
         run_game_action.triggered.connect(lambda: self.steam_api_controller.run_game(app_id))
@@ -79,6 +84,7 @@ class MenuManager(QObject):
         copy_game_name= QAction(f"复制name: {game_name}", self.view)
         copy_game_name.triggered.connect(lambda: QApplication.clipboard().setText(game_name))
         context_menu.addAction(copy_game_name)
+        
         
         # 显示菜单
         context_menu.exec_(position) 

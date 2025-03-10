@@ -88,7 +88,7 @@ def cleanup():
         print(f"删除旧的{spec_file}文件...")
         os.remove(spec_file)
 
-def check_and_remove_pathlib():
+
     """检查并移除pathlib包（在Python 3.4+中已内置）"""
     try:
         # 尝试卸载pathlib
@@ -189,7 +189,6 @@ def main():
     print(f"=== Steam游戏解锁器打包工具 v{VERSION} ===")
     ensure_pyinstaller()
     update_project_info()  # 更新项目信息
-    check_and_remove_pathlib()  # 添加检查和卸载pathlib的步骤
     cleanup()
     build_exe()
     

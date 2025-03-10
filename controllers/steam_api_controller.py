@@ -271,3 +271,13 @@ class SteamApiController(QObject):
                 f"启动游戏 {app_id} 时发生错误: {str(e)}"
             )
     
+    def open_library_page(self, app_id: str):
+        """跳转到Steam库中的游戏页面
+        
+        Args:
+            app_id: 游戏AppID
+        """
+        import webbrowser
+        url = f"steam://nav/games/details/{app_id}"
+        webbrowser.open(url)
+    

@@ -12,8 +12,7 @@ ENV/
 config.json
 *.config
 *_config.json
-branch_cache.json
-games_data.json
+*.json
 *.json.bak
 
 # 临时文件夹和生成的文件

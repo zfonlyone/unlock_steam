@@ -144,9 +144,9 @@ async def setup_steamtools(depot_data: List[Tuple[str, str]], app_id: str, depot
             
             if proc.returncode != 0:
                 stderr = await proc.stderr.read()
-                LOG.info(f"Lua compilation failed: {stderr.decode()}")
+                LOG.warning(f"Lua compilation failed: {stderr.decode()}")
                 return False
-            LOG.error(f"Lua compilation!")
+            LOG.info(f"Lua compilation!")
             # Delete temporary Lua file
             if lua_file.exists():
                 os.remove(lua_file)
@@ -204,33 +204,44 @@ async def setup_greenluma(depot_data: List[Tuple[str, str]], steam_path: Path) -
 
 
 #解锁
-async def unlock_process(steam_path: Path, manifests_path: Path,app_id: str) -> None:
+async def unlock_process(steam_path: Path, manifests_path: Path, app_id: str) -> bool:
     # Process manifest folder
     LOG.info(f"Processing manifest folder: {manifests_path}")
-
 
     #验证密钥
     depot_data, depot_map = await process_manifest_folder(manifests_path)
 
     if not depot_data:
         LOG.error("No depot keys found in the manifest folder")
-        return
+        return False
 
     LOG.info(f"Found {len(depot_data)} depot keys and {sum(len(v) for v in depot_map.values())} manifest files")
 
     # Copy manifests to Steam's depotcache
-    await copy_manifests_to_steam(manifests_path, steam_path, depot_map)
+    try:
+        await copy_manifests_to_steam(manifests_path, steam_path, depot_map)
+    except Exception as e:
+        LOG.error(f"Failed to copy manifests to Steam: {str(e)}")
+        return False
 
     #转换成st
     success = False
-    success = await setup_steamtools(depot_data, app_id, depot_map, steam_path)
+    try:
+        success = await setup_steamtools(depot_data, app_id, depot_map, steam_path)
+    except Exception as e:
+        LOG.error(f"Error during SteamTools setup: {str(e)}")
+        return False
+        
     if success:
         LOG.info("Game unlock configuration completed successfully!")
         LOG.info("Restart Steam for changes to take effect")
     else:
         LOG.error("Failed to configure game unlock")
+    
+    return success
 
-async def unlock_process_lua(steam_path: Path, manifests_path: Path, app_id: str) -> None:
+
+async def unlock_process_lua(steam_path: Path, manifests_path: Path, app_id: str) -> bool:
     """Configure SteamTools for game unlocking and copy manifest files"""
     LOG.info(f"Processing manifest folder: {manifests_path}")
     
