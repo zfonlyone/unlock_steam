@@ -9,16 +9,10 @@ from typing import List, Tuple, Dict, Any
 
 
 class Logger:
-    """Simple logger class for console output"""
-    
-    def info(self, message):
-        print(f"[INFO] {message}")
-        
-    def warning(self, message):
-        print(f"[WARNING] {message}")
-        
-    def error(self, message):
-        print(f"[ERROR] {message}")
+    """Silent logger class - no output"""
+    def info(self, message): pass
+    def warning(self, message): pass
+    def error(self, message): pass
 
 
 LOG = Logger()
@@ -32,8 +26,7 @@ async def parse_key_vdf(file_path: Path) -> List[Tuple[str, str]]:
         
         depots = vdf.loads(content)["depots"]
         return [(d_id, d_info["DecryptionKey"]) for d_id, d_info in depots.items()]
-    except Exception as e:
-        LOG.error(f"Failed to parse key file {file_path}: {str(e)}")
+    except Exception:
         return []
 
 
@@ -109,57 +102,24 @@ async def setup_steamtools(depot_data: List[Tuple[str, str]], app_id: str, depot
     st_path = steam_path / "config" / "stplug-in"
     st_path.mkdir(exist_ok=True)
 
-    # Always lock to specific version in the UI application
-    versionlock = True
-
     # Create Lua script content
     lua_content = f'addappid({app_id}, 1, "None")\n'
     for d_id, d_key in depot_data:
-        if versionlock and d_id in depot_map and depot_map[d_id]:
+        if d_id in depot_map and depot_map[d_id]:
             for manifest_id in depot_map[d_id]:
                 lua_content += f'addappid({d_id}, 1, "{d_key}")\nsetManifestid({d_id},"{manifest_id}")\n'
-                # Only use the first (newest) manifest ID
                 break
         else:
             lua_content += f'addappid({d_id}, 1, "{d_key}")\n'
 
     # Write the Lua file
-
     lua_file = st_path / f"{app_id}.lua"
-    async with aiofiles.open(lua_file, "w") as f:
-        await f.write(lua_content)
-    
-    LOG.info(f"Created SteamTools plugin file: {lua_file}")
-    
-    # Check if luapacka.exe exists and run it if it does
-    if (st_path / "luapacka.exe").exists():
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                str(st_path / "luapacka.exe"),
-                str(lua_file),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.wait()
-            
-            if proc.returncode != 0:
-                stderr = await proc.stderr.read()
-                LOG.warning(f"Lua compilation failed: {stderr.decode()}")
-                return False
-            LOG.info(f"Lua compilation!")
-            # Delete temporary Lua file
-            if lua_file.exists():
-                os.remove(lua_file)
-                LOG.info(f"Deleted temporary file: {lua_file}")
-                
-        except Exception as e:
-            LOG.error(f"Failed to run luapacka.exe: {str(e)}")
-            LOG.info("Please compile the Lua file manually using SteamTools")
-            return False
-    else:
-        LOG.info("luapacka.exe not found. Please compile the Lua file manually using SteamTools")
-    
-    return True
+    try:
+        async with aiofiles.open(lua_file, "w") as f:
+            await f.write(lua_content)
+        return True
+    except:
+        return False
 
 
 async def setup_greenluma(depot_data: List[Tuple[str, str]], steam_path: Path) -> bool:
@@ -203,53 +163,36 @@ async def setup_greenluma(depot_data: List[Tuple[str, str]], steam_path: Path) -
     return True
 
 
-#解锁
 async def unlock_process(steam_path: Path, manifests_path: Path, app_id: str) -> bool:
-    # Process manifest folder
-    LOG.info(f"Processing manifest folder: {manifests_path}")
-
-    #验证密钥
-    depot_data, depot_map = await process_manifest_folder(manifests_path)
-
-    if not depot_data:
-        LOG.error("No depot keys found in the manifest folder")
-        return False
-
-    LOG.info(f"Found {len(depot_data)} depot keys and {sum(len(v) for v in depot_map.values())} manifest files")
-
-    # Copy manifests to Steam's depotcache
-    try:
-        await copy_manifests_to_steam(manifests_path, steam_path, depot_map)
-    except Exception as e:
-        LOG.error(f"Failed to copy manifests to Steam: {str(e)}")
-        return False
-
-    #转换成st
-    success = False
-    try:
-        success = await setup_steamtools(depot_data, app_id, depot_map, steam_path)
-    except Exception as e:
-        LOG.error(f"Error during SteamTools setup: {str(e)}")
-        return False
-        
-    if success:
-        LOG.info("Game unlock configuration completed successfully!")
-        LOG.info("Restart Steam for changes to take effect")
-    else:
-        LOG.error("Failed to configure game unlock")
+    """直接复制清单文件到Steam目录"""
+    # 复制清单文件到depot缓存
+    depot_cache = steam_path / "config" / "depotcache"
+    depot_cache.mkdir(exist_ok=True)
     
-    return success
+    # 复制所有manifest文件
+    try:
+        for manifest_file in manifests_path.glob("**/*.manifest"):
+            dest_file = depot_cache / manifest_file.name
+            if not dest_file.exists():
+                try:
+                    async with aiofiles.open(manifest_file, "rb") as src:
+                        content = await src.read()
+                        async with aiofiles.open(dest_file, "wb") as dst:
+                            await dst.write(content)
+                except:
+                    pass
+        return True
+    except:
+        return False
 
 
 async def unlock_process_lua(steam_path: Path, manifests_path: Path, app_id: str) -> bool:
-    """Configure SteamTools for game unlocking and copy manifest files"""
-    LOG.info(f"Processing manifest folder: {manifests_path}")
-    
-    # Setup SteamTools path
+    """直接复制Lua文件到Steam目录"""
+    # 设置路径
     st_path = steam_path / "config" / "stplug-in"
     st_path.mkdir(exist_ok=True)
-
-    # Copy app_id.lua file if it exists in manifests_path
+    
+    # 复制app_id.lua文件
     source_lua = manifests_path / f"{app_id}.lua"
     if source_lua.exists():
         lua_file = st_path / f"{app_id}.lua"
@@ -258,66 +201,24 @@ async def unlock_process_lua(steam_path: Path, manifests_path: Path, app_id: str
                 content = await src.read()
                 async with aiofiles.open(lua_file, "wb") as dst:
                     await dst.write(content)
-            LOG.info(f"Copied {app_id}.lua to SteamTools directory")
-        except Exception as e:
-            LOG.error(f"Failed to copy lua file: {str(e)}")
-    else:
-        LOG.warning(f"Lua file {app_id}.lua not found in {manifests_path}")
-        lua_file = st_path / f"{app_id}.lua"
-
-    # Copy all manifest files to depotcache
+        except:
+            return False
+    
+    # 同时复制清单文件
     depot_cache = steam_path / "config" / "depotcache"
     depot_cache.mkdir(exist_ok=True)
     
-    # Find and copy all manifest files
-    manifest_count = 0
     for manifest_file in manifests_path.glob("**/*.manifest"):
         dest_file = depot_cache / manifest_file.name
-        if dest_file.exists():
-            LOG.warning(f"Manifest already exists: {dest_file}")
-            continue
-        
-        try:
-            # Copy the file
-            async with aiofiles.open(manifest_file, "rb") as src:
-                content = await src.read()
-                async with aiofiles.open(dest_file, "wb") as dst:
-                    await dst.write(content)
-            LOG.info(f"Copied manifest: {manifest_file.name}")
-            manifest_count += 1
-        except Exception as e:
-            LOG.error(f"Failed to copy manifest {manifest_file.name}: {str(e)}")
+        if not dest_file.exists():
+            try:
+                async with aiofiles.open(manifest_file, "rb") as src:
+                    content = await src.read()
+                    async with aiofiles.open(dest_file, "wb") as dst:
+                        await dst.write(content)
+            except:
+                pass
     
-    LOG.info(f"Copied {manifest_count} manifest files to depotcache")
-
-    # Check if luapacka.exe exists and run it if it does
-    if (st_path / "luapacka.exe").exists():
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                str(st_path / "luapacka.exe"),
-                str(lua_file),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.wait()
-
-            if proc.returncode != 0:
-                stderr = await proc.stderr.read()
-                LOG.error(f"Lua compilation failed: {stderr.decode()}")
-                return False
-
-            # Delete temporary Lua file
-            if lua_file.exists():
-                os.remove(lua_file)
-                LOG.info(f"Deleted temporary file: {lua_file}")
-
-        except Exception as e:
-            LOG.error(f"Failed to run luapacka.exe: {str(e)}")
-            LOG.info("Please compile the Lua file manually using SteamTools")
-            return False
-    else:
-        LOG.info("luapacka.exe not found. Please compile the Lua file manually using SteamTools")
-
     return True
 
 
@@ -362,10 +263,10 @@ async def main():
 
 
     # Check for installed unlock tools
-    has_steamtools = (steam_path / "config" / "stUI").is_dir()
+    has_steamtools = (steam_path / "config" / "stplug-in").is_dir()
     has_greenluma = any(
         (steam_path / dll).exists()
-        for dll in ["GreenLuma_2024_x86.dll", "GreenLuma_2024_x64.dll", "User32.dll"]
+        for dll in ["GreenLuma_2024_x86.dll", "GreenLuma_2024_x64.dll", "hid.dll"]
     )
     
     if not (has_steamtools or has_greenluma):

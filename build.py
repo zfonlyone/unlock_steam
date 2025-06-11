@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 
 # 项目版本信息
-VERSION = "1.1.0"  # 当前版本号
+VERSION = "1.2.0"  # 当前版本号
 BUILD_DATE = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 AUTHOR = "zfonlyone"
 COPYRIGHT = f"Copyright © {datetime.now().year} Your Name. All rights reserved."

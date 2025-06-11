@@ -13,7 +13,7 @@ class ProjectInfo:
     _PROJECT_INFO = {
         "name": "Steam游戏解锁工具",
         "name_en": "Steam Game Unlocker",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "author": "zfonlyone",
         "license": "GPL-3.0",
         "description": "一个用于解锁Steam游戏的工具",

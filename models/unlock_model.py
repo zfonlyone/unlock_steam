@@ -1,13 +1,13 @@
-import os
 import shutil
 import subprocess
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any, Callable
+from typing import Dict, Tuple, Callable
 import aiofiles
 
 # 导入解锁脚本，假设它已经存在于项目根目录
-import unlock_script
+from models import unlock_script
+
 
 class UnlockModel:
     """游戏解锁功能的模型层"""
@@ -62,10 +62,10 @@ class UnlockModel:
         """
         steam_path = self.get_steam_path()
         
-        # 检查是否有appid.st文件，这是判断游戏是否解锁的标志
+        # 检查是否有appid.lua文件，这是判断游戏是否解锁的标志
         stplug_dir = steam_path / "config" / "stplug-in"
         if stplug_dir.exists():
-            st_file = stplug_dir / f"{app_id}.st"
+            st_file = stplug_dir / f"{app_id}.lua"
             if st_file.exists():
                 return True
             
@@ -94,7 +94,7 @@ class UnlockModel:
         return await self.check_unlock_status(app_id)
     
     async def unlock_game(self, app_id: str, database_name: str) -> Tuple[bool, str]:
-        """解锁游戏
+        """解锁游戏 - 只复制必要文件
         
         Args:
             app_id: 游戏的AppID
@@ -104,19 +104,13 @@ class UnlockModel:
             (是否成功, 消息)
         """
         if not self.is_config_valid():
-            return False, "配置无效，请先配置Steam路径和清单仓库路径"
+            return False, "配置无效"
             
         repo_path = self.get_repo_path()
         steam_path = self.get_steam_path()
         
-        # 创建临时目录
-        temp_dir = repo_path.parent / "steamunlock_temp" / app_id
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        
         try:
             # 使用Git检出对应的分支
-            branch_pattern = f"*{app_id}*"
-            
             # 查找匹配的分支
             result = subprocess.run(
                 ["git", "branch", "-a"],
@@ -127,7 +121,7 @@ class UnlockModel:
             )
             
             if result.returncode != 0:
-                return False, f"Git操作失败: {result.stderr}"
+                return False, "Git操作失败"
                 
             # 从输出中找到匹配的分支
             branches = result.stdout.splitlines()
@@ -137,13 +131,12 @@ class UnlockModel:
                 branch = branch.strip()
                 if app_id in branch:
                     target_branch = branch.replace("*", "").strip()
-                    # 如果是远程分支，转换为本地分支
                     if target_branch.startswith("remotes/"):
                         target_branch = target_branch.split("/", 2)[-1]
                     break
             
             if not target_branch:
-                return False, f"未找到包含AppID {app_id} 的分支"
+                return False, "未找到分支"
                 
             # 检出目标分支
             result = subprocess.run(
@@ -155,63 +148,36 @@ class UnlockModel:
             )
             
             if result.returncode != 0:
-                return False, f"Git检出分支失败: {result.stderr}"
+                return False, "Git检出失败"
                 
-            # 复制清单文件到临时目录
-            manifest_files = list(repo_path.glob("*.manifest"))
-            key_files = list(repo_path.glob("key.vdf"))
+            # 直接从仓库复制文件到Steam目录
             lua_file = repo_path / f"{app_id}.lua"
             
-            if not manifest_files:
-                return False, f"在仓库中未找到任何清单文件(*.manifest)"
-                
-            # 复制文件
-            for file in manifest_files:
-                shutil.copy2(str(file), str(temp_dir))
-                
-            for file in key_files:
-                shutil.copy2(str(file), str(temp_dir))
-                
-            # 如果存在appid.lua文件，也复制它
+            # 设置路径
+            st_path = steam_path / "config" / "stplug-in"
+            st_path.mkdir(exist_ok=True)
+            
+            depot_cache = steam_path / "config" / "depotcache"
+            depot_cache.mkdir(exist_ok=True)
+            
+            # 复制.lua文件(如果存在)
             if lua_file.exists():
-                shutil.copy2(str(lua_file), str(temp_dir))
+                dst_lua = st_path / f"{app_id}.lua"
+                shutil.copy2(str(lua_file), str(dst_lua))
             
-            # 根据appid.lua文件是否存在选择解锁方法
-            loop = asyncio.get_event_loop()
+            # 复制所有manifest文件
+            success = False
+            for manifest_file in repo_path.glob("*.manifest"):
+                dst_manifest = depot_cache / manifest_file.name
+                if not dst_manifest.exists():
+                    shutil.copy2(str(manifest_file), str(dst_manifest))
+                    success = True
             
-            if lua_file.exists():
-                # 使用直接lua解锁方法
-                success = await unlock_script.unlock_process_lua(steam_path, temp_dir, app_id)
-                if success:
-                    return True, f"游戏 {app_id} 使用Lua方法解锁成功，请重启Steam"
-                else:
-                    return False, "使用Lua方法解锁失败"
-            else:
-                # 使用原始解锁方法
-                depot_data, depot_map = await unlock_script.process_manifest_folder(temp_dir)
+            return True, "成功"
                 
-                if not depot_data:
-                    return False, "No depot keys found in the manifest folder"
-                    
-                # 复制清单到\Steam\config\depotcache
-                await unlock_script.copy_manifests_to_steam(temp_dir, steam_path, depot_map)
-                
-                # 设置解锁工具
-                preferred_tool = self.config.get("preferred_unlock_tool", "steamtools")
-                
-                if preferred_tool == "steamtools":
-                    success = await unlock_script.setup_steamtools(depot_data, app_id, depot_map, steam_path)
-                else:
-                    success = await unlock_script.setup_greenluma(depot_data, steam_path)
-                    
-                if success:
-                    return True, f"游戏 {app_id} 解锁成功，请重启Steam"
-                else:
-                    return False, f"设置解锁工具失败"
-                
-        except Exception as e:
-            return False, f"解锁过程中出错: {str(e)}"
-            
+        except Exception:
+            return False, "错误"
+    
     async def unlock_game_async(self, app_id: str, database_name: str, progress_callback: Callable[[str, int], None] = None) -> Tuple[bool, str]:
         """解锁游戏(异步版本，带进度回调)
         
@@ -251,8 +217,8 @@ class UnlockModel:
         steam_path = self.get_steam_path()
         
         try:
-            # 移除SteamTools插件目录中的.st文件
-            st_file = steam_path / "config" / "stplug-in" / f"{app_id}.st"
+            # 移除SteamTools插件目录中的.lua文件
+            st_file = steam_path / "config" / "stplug-in" / f"{app_id}.lua"
             if st_file.exists():
                 st_file.unlink()
             
@@ -308,10 +274,10 @@ class UnlockModel:
             
         steam_path = self.get_steam_path()
         
-        # 扫描SteamTools插件目录中的.st文件
+        # 扫描SteamTools插件目录中的.lua文件
         plugin_dir = steam_path / "config" / "stplug-in"
         if plugin_dir.exists():
-            for st_file in plugin_dir.glob("*.st"):
+            for st_file in plugin_dir.glob("*.lua"):
                 app_id = st_file.stem
                 if app_id.isdigit():  # 只处理纯数字的AppID
                     unlocked_games[app_id] = True
