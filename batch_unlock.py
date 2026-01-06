@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import asyncio
 import os
 import shutil
@@ -8,10 +7,16 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import datetime
+import urllib.request
+import urllib.error
+import re
 
-from models import unlock_process, unlock_process_lua
+# 增加项目根目录到路径
+sys.path.insert(0, str(Path(__file__).parent))
+
+from models import UnlockModel, ConfigModel, DataManager, GamesDatabase
 
 # 基础Logger类
 class Logger:
@@ -54,13 +59,17 @@ LOG = MinimalLogger()
 
 # 默认配置
 DEFAULT_CONFIG = {
-    "repo_path": "D:/Game/steamtools/Manifes/SteamAutoCracks/ManifestHub",  # Git仓库路径
+    "unlock_source": "remote",  # 解锁来源: local (本地Git) 或 remote (远程API/GitHub)
+    "repo_path": "",  # 本地 Git 仓库路径 (用于 local 模式)
+    "repo_url": "https://github.com/ManifestHub/ManifestHub",  # 远程仓库 URL
     "steam_path": "C:/Program Files (x86)/Steam",  # Steam安装路径
-    "specific_appids": [],  # 指定要解锁的AppID列表，空列表表示全部处理（这里设置为CSGO的AppID进行测试）
-    "max_retries": 3,  # 单个AppID的最大重试次数
-    "batch_size": 1000,  # 每批次处理的AppID数量
-    "show_details": True,  # 是否显示详细日志
-    "auto_clean_failed": True,  # 运行结束时是否自动清理成功的AppID从失败列表中移除
+    "api_key": "",  # ManifestHub API 密钥
+    "github_token": "",  # GitHub Token (增加API调用限额)
+    "specific_appids": [],  # 指定要解锁的AppID列表，空列表表示自动扫描
+    "max_retries": 3,
+    "batch_size": 100,  # 并发执行的批次大小
+    "show_details": True,
+    "auto_clean_failed": True,
 }
 
 def format_time(seconds):
@@ -284,194 +293,199 @@ async def process_app(app_id: str, worktree_path: Path, steam_path: Path,
     except Exception as e:
         return False, str(e)
 
-async def extract_app_ids_from_branches(repo_path: Path) -> List[str]:
-    """Extract app IDs from branch names in the repository"""
-    success, output = await run_command(
-        ["git", "branch", "-r"], 
-        cwd=str(repo_path)
-    )
-    
-    if not success:
+async def extract_app_ids_from_db():
+    """从本地数据库 games_data.db 提取 AppID 列表"""
+    try:
+        db_path = Path("games_data.db")
+        if not db_path.exists():
+            return []
+            
+        data_manager = DataManager()
+        games = data_manager.get_all_games()
+        app_ids = [str(g.get("app_id")) for g in games if g.get("app_id")]
+        return list(set(app_ids))
+    except Exception as e:
+        print(f"从本地数据库读取失败: {e}")
+        return []
+
+async def extract_app_ids_from_remote(repo_url: str, token: str = "") -> List[str]:
+    """从 GitHub API 获取分支列表中的 AppID"""
+    if "github.com" not in repo_url:
         return []
     
+    parts = repo_url.rstrip("/").split("github.com/")
+    repo_path = parts[1].rstrip(".git") if len(parts) > 1 else ""
+    if not repo_path:
+        return []
+        
+    api_url = f"https://api.github.com/repos/{repo_path}/branches?per_page=100"
+    headers = {"User-Agent": "SteamUnlocker/2.0", "Accept": "application/vnd.github.v3+json"}
+    if token:
+        headers["Authorization"] = f"token {token}"
+        
     app_ids = set()
-    for line in output.splitlines():
-        branch = line.strip().replace("* ", "").replace("origin/", "")
-        parts = branch.split('_')
-        for part in parts:
-            digits_only = ''.join(c for c in part if c.isdigit())
-            if len(digits_only) >= 5:
-                app_ids.add(digits_only)
-                break
-    
+    try:
+        page = 1
+        while True:
+            url = f"{api_url}&page={page}"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as response:
+                branches_info = json.loads(response.read().decode('utf-8'))
+                if not branches_info:
+                    break
+                
+                for branch in branches_info:
+                    name = branch.get("name", "")
+                    # 匹配数字 AppID (通常是全数字或 st_数字)
+                    match = re.search(r'(\d{5,})', name)
+                    if match:
+                        app_ids.add(match.group(1))
+                
+                if len(branches_info) < 100:
+                    break
+                page += 1
+    except Exception as e:
+        print(f"获取远程分支列表失败: {e}")
+        
     return list(app_ids)
 
+def print_progress_bar(percent, msg="", start_time=None, total=0, processed=0):
+    """打印 ASCII 进度条"""
+    # 静态变量模拟，记录上次百分比
+    if not hasattr(print_progress_bar, "last_percent"):
+        print_progress_bar.last_percent = 0
+        
+    if percent == -1:
+        percent = print_progress_bar.last_percent
+    else:
+        print_progress_bar.last_percent = percent
+
+    bar_width = 30
+    filled = int(bar_width * percent / 100)
+    bar = "█" * filled + "░" * (bar_width - filled)
+    elapsed = time.time() - start_time if start_time else 0
+    
+    # 使用 \r 覆盖当前行，msg 限制长度
+    info = f" {percent:3d}% | {elapsed:.1f}s | {processed}/{total} | {msg[:30]:<30}"
+    print(f"\r[{bar}]{info}", end="", flush=True)
+    if percent >= 100:
+        print()
+
 async def batch_unlock_process():
-    """批量解锁处理的主流程 - 极简版"""
+    """批量解锁处理的主流程 - 并发增强版"""
     # 加载配置
     config = load_config()
     
-    # 验证路径
-    repo_path = Path(config["repo_path"])
-    steam_path = Path(config["steam_path"])
+    # 初始化模型
+    unlock_model = UnlockModel(config)
+    data_manager = DataManager()
+    steam_path = Path(unlock_model.get_steam_path())
     
-    # 检查路径是否存在
-    if not repo_path.exists() or not (repo_path / ".git").exists():
-        print("错误: 无效的Git仓库路径")
+    if not steam_path.exists():
+        print(f"错误: Steam 路径无效: {steam_path}")
         return
         
-    if not steam_path.exists() or not (steam_path / "steam.exe").exists():
-        print("错误: 无效的Steam安装路径")
-        return
-    
-    # 加载状态
+    # 加载断点续传状态
     state = load_state()
-    processed_appids = state["processed_appids"]
+    processed_appids = state.get("processed_appids", set())
     
     # 获取要处理的AppID列表
     app_ids = []
-    if config["specific_appids"]:
+    if config.get("specific_appids"):
         app_ids = config["specific_appids"]
         print(f"处理 {len(app_ids)} 个指定AppID")
     else:
-        app_ids = await extract_app_ids_from_branches(repo_path)
+        source = config.get("unlock_source", "remote")
+        if source == "local":
+            repo_path = Path(config.get("repo_path", ""))
+            if not repo_path.exists():
+                print("错误: 本地仓库路径无效")
+                return
+            app_ids = await extract_app_ids_from_branches(repo_path)
+        else:
+            # 优先尝试从本地数据库获取
+            print("正在从本地数据库提取 AppID 列表...")
+            app_ids = await extract_app_ids_from_db()
+            
+            if not app_ids:
+                print(f"本地数据库为空或不存在，正在从云端获取: {config['repo_url']}...")
+                app_ids = await extract_app_ids_from_remote(config["repo_url"], config.get("github_token", ""))
+            
         if not app_ids:
-            print("错误: 未能提取AppID")
+            print("错误: 未能获取到 AppID 列表")
             return
-        print(f"提取到 {len(app_ids)} 个AppID")
+        print(f"共发现 {len(app_ids)} 个游戏")
     
-    # 筛选出待处理的AppID
-    if processed_appids:
-        pending_appids = [app_id for app_id in app_ids if app_id not in processed_appids]
-        print(f"待处理: {len(pending_appids)} 个")
-        app_ids = pending_appids
+    # 筛选待处理
+    pending_appids = [aid for aid in app_ids if aid not in processed_appids]
+    total_count = len(pending_appids)
     
-    # 如果没有待处理的AppID，退出
-    if not app_ids:
-        print("没有待处理的AppID")
+    if total_count == 0:
+        print("🎉 所有游戏已处理完成！")
         return
+        
+    print(f"待处理: {total_count} 个 (已跳过 {len(processed_appids)} 个)")
     
-    # 分批次处理
-    batch_size = config.get("batch_size", 10)
-    total_batches = (len(app_ids) + batch_size - 1) // batch_size
-    current_batch = state.get("current_batch", 0)
-    
-    # 统计
-    successful_appids = set()
-    new_failed_appids = {}
-    
-    # 总进度计算变量
-    total_count = len(app_ids)
-    processed_count = 0
+    # 分批并发处理
+    batch_size = config.get("batch_size", 100)
     start_time = time.time()
+    successful_count = 0
     
-    print(f"开始处理 {total_count} 个AppID...")
-    
-    for batch_index in range(current_batch, total_batches):
-        batch_start = batch_index * batch_size
-        batch_end = min(batch_start + batch_size, len(app_ids))
-        batch_appids = app_ids[batch_start:batch_end]
+    print(f"\n{'='*65}")
+    print(f"🚀 开始批处理 - 模式: {config.get('unlock_source')} | 并发: {batch_size}")
+    print(f"{'='*65}\n")
+
+    # 为了保持断点续传，我们按批次调用并发解锁
+    for i in range(0, total_count, batch_size):
+        current_batch = pending_appids[i:i + batch_size]
         
-        # 显示批次进度
-        print(f"批次: {batch_index+1}/{total_batches}")
+        def progress_callback(msg, percent):
+            # 将批次的百分比映射到全局百分比
+            global_percent = int(((i + (percent/100 * len(current_batch))) / total_count) * 100)
+            print_progress_bar(global_percent, msg, start_time, total_count, i + int(percent/100 * len(current_batch)))
+
+        # 构建清单映射
+        app_data = {}
+        all_games = data_manager.get_all_games()
+        game_map = {str(g['app_id']): g for g in all_games}
+        for aid in current_batch:
+            game = game_map.get(str(aid))
+            if game and 'depots' in game:
+                m_ids = [f"{did}_{d['manifest_id']}" for did, d in game['depots'].items() if d.get('manifest_id')]
+                if m_ids:
+                    app_data[str(aid)] = m_ids
+
+        # 调用并发解锁模型
+        batch_results = await unlock_model.batch_unlock_concurrent(current_batch, progress_callback, app_data=app_data)
         
-        # 创建临时目录
-        with tempfile.TemporaryDirectory() as temp_dir_str:
-            temp_dir = Path(temp_dir_str)
-            
-            # 获取分支列表
-            success, output = await run_command(
-                ["git", "branch", "-a"], 
-                cwd=str(repo_path)
-            )
-            
-            if not success:
-                continue
-            
-            # 解析分支名称
-            branches = []
-            for line in output.splitlines():
-                branch = line.strip().replace("* ", "")
-                if branch:
-                    if branch.startswith("remotes/"):
-                        branch = branch.replace("remotes/", "", 1)
-                    branches.append(branch)
-            
-            # 处理每个AppID
-            for idx, app_id in enumerate(batch_appids):
-                # 显示当前进度
-                processed_count += 1
-                percent = int(processed_count / total_count * 100)
-                elapsed = time.time() - start_time
-                
-                # 估算剩余时间
-                if processed_count > 1:
-                    eta = (elapsed / processed_count) * (total_count - processed_count)
-                    eta_str = format_time(eta)
-                else:
-                    eta_str = "计算中..."
-                
-                print(f"进度: {percent}% [{processed_count}/{total_count}] - 当前: {app_id} - 剩余时间: {eta_str}", end="\r")
-                
-                # 查找匹配的分支
-                matching_branches = [b for b in branches if app_id in b]
-                
-                if not matching_branches:
-                    new_failed_appids[app_id] = "没有匹配的分支"
-                    update_failed_list(app_id, "没有匹配的分支")
-                    continue
-                
-                # 使用第一个匹配的分支
-                branch = matching_branches[0]
-                
-                # 创建工作树
-                success, worktree_path = await setup_git_worktree(repo_path, branch, temp_dir)
-                if not success:
-                    new_failed_appids[app_id] = "创建工作树失败"
-                    update_failed_list(app_id, "创建工作树失败")
-                    continue
-                
-                try:
-                    # 处理AppID
-                    result, error_msg = await process_app(app_id, worktree_path, steam_path)
-                    
-                    if result:
-                        successful_appids.add(app_id)
-                        processed_appids.add(app_id)
-                    else:
-                        new_failed_appids[app_id] = error_msg or "处理失败"
-                        update_failed_list(app_id, error_msg or "处理失败")
-                except Exception as e:
-                    new_failed_appids[app_id] = str(e)
-                    update_failed_list(app_id, str(e))
-                finally:
-                    # 清理工作树
-                    await cleanup_git_worktree(repo_path, worktree_path)
-                    
-                    # 更新状态
-                    state["processed_appids"] = processed_appids
-                    state["last_run"] = datetime.datetime.now().isoformat()
-                    state["current_batch"] = batch_index
-                    save_state(state)
+        # 处理结果并保存状态
+        batch_success = 0
+        for aid, (success, msg) in batch_results.items():
+            if success:
+                batch_success += 1
+                processed_appids.add(aid)
+                successful_count += 1
+            else:
+                update_failed_list(aid, msg)
         
-        # 更新状态
-        state["current_batch"] = batch_index + 1
+        # 保存断点
+        state["processed_appids"] = processed_appids
+        state["last_run"] = datetime.datetime.now().isoformat()
         save_state(state)
-        
-        # 批次完成后换行
-        print()
     
-    # 清理成功的AppID从失败列表中
-    if config.get("auto_clean_failed", True) and successful_appids:
-        clean_successful_from_failed(successful_appids)
+    # 完成
+    print_progress_bar(100, "全部处理完成", start_time, total_count, total_count)
     
-    # 计算总用时
-    total_time = time.time() - start_time
-    time_str = format_time(total_time)
+    elapsed = time.time() - start_time
+    print(f"\n{'='*65}")
+    print(f"✅ 处理完成！")
+    print(f"   📊 成功: {successful_count} | 失败: {total_count - successful_count} | 总计: {total_count}")
+    print(f"   ⏱️  总耗时: {format_time(elapsed)}")
+    print(f"{'='*65}\n")
     
-    # 显示总结
-    print(f"处理完成! 总用时: {time_str}")
-    print(f"成功: {len(successful_appids)} 个, 失败: {len(new_failed_appids)} 个")
+    if config.get("auto_clean_failed") and successful_count > 0:
+        # 这里逻辑稍微改动，传入已处理集合即可
+        clean_successful_from_failed(processed_appids)
 
 async def main():
     """主函数"""

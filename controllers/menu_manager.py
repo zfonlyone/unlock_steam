@@ -41,7 +41,19 @@ class MenuManager(QObject):
         context_menu = QMenu(self.view)
         
         # 解锁相关菜单项
-        if is_unlocked:
+        if is_unlocked == "disabled":
+            enable_action = QAction("重新启用", self.view)
+            enable_action.triggered.connect(lambda: self.view.toggleUnlockRequested.emit(game_data))
+            context_menu.addAction(enable_action)
+            
+            remove_action = QAction("取消解锁 (彻底删除)", self.view)
+            remove_action.triggered.connect(lambda: self.unlock_controller.remove_unlock(app_id))
+            context_menu.addAction(remove_action)
+        elif is_unlocked:
+            disable_action = QAction("禁用解锁", self.view)
+            disable_action.triggered.connect(lambda: self.view.toggleUnlockRequested.emit(game_data))
+            context_menu.addAction(disable_action)
+            
             remove_action = QAction("取消解锁", self.view)
             remove_action.triggered.connect(lambda: self.unlock_controller.remove_unlock(app_id))
             context_menu.addAction(remove_action)
@@ -49,6 +61,25 @@ class MenuManager(QObject):
             unlock_action = QAction("解锁游戏", self.view)
             unlock_action.triggered.connect(lambda: self.unlock_controller.unlock_game(app_id))
             context_menu.addAction(unlock_action)
+        
+        # 清单管理选项
+        if is_unlocked:
+            context_menu.addSeparator()
+            
+            # 单个游戏的固定清单管理
+            disable_man_single_action = QAction("🔒 禁用固定清单", self.view)
+            disable_man_single_action.triggered.connect(lambda: self.unlock_controller.toggle_single_manifest(app_id, False))
+            context_menu.addAction(disable_man_single_action)
+            
+            enable_man_single_action = QAction("🔓 启用固定清单", self.view)
+            enable_man_single_action.triggered.connect(lambda: self.unlock_controller.toggle_single_manifest(app_id, True))
+            context_menu.addAction(enable_man_single_action)
+
+            # 更新清单 (API) - 仅限未禁用的
+            if is_unlocked != "disabled":
+                update_man_action = QAction("🔄 更新清单 (API)", self.view)
+                update_man_action.triggered.connect(lambda: self.view.updateManifestRequested.emit(game_data))
+                context_menu.addAction(update_man_action)
         
         
         # 添加分隔线

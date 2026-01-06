@@ -13,14 +13,14 @@ class ProjectInfo:
     _PROJECT_INFO = {
         "name": "Steam游戏解锁工具",
         "name_en": "Steam Game Unlocker",
-        "version": "1.2.0",
+        "version": "2.2.0",
         "author": "zfonlyone",
         "license": "GPL-3.0",
         "description": "一个用于解锁Steam游戏的工具",
         "description_en": "A tool for unlocking Steam games",
         "website": "https://github.com/zfonlyone/unlock_steam",
         "build_date": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-        "copyright": f"Copyright © 2025 Your Name. All rights reserved."
+        "copyright": f"Copyright © 2026 zfonlyone. All rights reserved."
     }
     
     # 密钥用于生成和验证签名 - 在实际部署时应使用更安全的方式存储

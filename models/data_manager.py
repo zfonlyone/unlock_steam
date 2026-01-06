@@ -1,435 +1,364 @@
+import sqlite3
 import json
 import os
-import time
 import datetime
 import copy
-import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Set
 
-
 class DataManager:
-    """管理游戏数据的本地存储(Model层)"""
+    """管理游戏数据的本地存储(Model层) - SQLite 版本"""
     
-    def __init__(self, data_file: str = "games_data.json"):
+    def __init__(self, db_file: str = "games_data.db", json_file: str = "games_data.json", config_model=None):
         """初始化数据管理器
         
         Args:
-            data_file: 数据文件的路径
+            db_file: SQLite 数据库文件路径
+            json_file: 旧的 JSON 数据文件路径（用于迁移）
+            config_model: 配置模型，用于获取隐私设置
         """
-        self.data_file = data_file
+        self.db_file = db_file
+        self.json_file = json_file
+        self.config_model = config_model
         
-        # 标准化的数据结构模板
-        self.default_data_structure = {
-            "games": {},  # 游戏数据字典，以AppID为键
-            "last_update": datetime.datetime.now().isoformat()  # 上次更新时间
-        }
+        # 初始化数据库
+        self._init_db()
         
-        # 是否是首次创建
-        is_first_creation = not os.path.exists(self.data_file)
-        
-        # 加载或创建数据
-        self.games_data = self._load_data()
-        
-        # 验证并修复数据文件
-        self._validate_and_repair_data()
-        
-        # 如果数据文件不存在，创建一个标准格式的空数据文件
-        if is_first_creation:
-            # 添加示例记录，帮助用户理解数据格式
-            if len(self.games_data.get("games", {})) == 0:
-                # 添加两个示例游戏（知名游戏）
-                self.update_game(
-                    app_id="730", 
-                    database_name="default", 
-                    game_name="免费无需解锁Counter-Strike 2", 
-                    is_unlocked=False, 
-                    auto_save=False
+        # 如果数据库为空且 JSON 文件存在，执行迁移
+        if self._is_db_empty() and os.path.exists(self.json_file):
+            print(f"检测到旧数据文件 {self.json_file}，正在迁移至 SQLite...")
+            self._migrate_from_json()
+            
+
+
+    def _get_conn(self):
+        """获取数据库连接"""
+        conn = sqlite3.connect(self.db_file)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        """初始化数据库表结构"""
+        with self._get_conn() as conn:
+            # 游戏主表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS games (
+                    app_id TEXT PRIMARY KEY,
+                    game_name TEXT,
+                    databases TEXT,
+                    is_unlocked INTEGER,
+                    last_updated TEXT,
+                    extra_data TEXT
                 )
-                self.update_game(
-                    app_id="570", 
-                    database_name="default", 
-                    game_name="免费无需解锁Dota 2", 
-                    is_unlocked=False, 
-                    auto_save=False
+            """)
+            
+            # 元数据表
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
                 )
+            """)
+            
+            # 初始化最后更新时间
+            conn.execute("INSERT OR IGNORE INTO metadata (key, value) VALUES ('last_update', ?)", 
+                        (datetime.datetime.now().isoformat(),))
+            conn.commit()
+
+    def _is_db_empty(self) -> bool:
+        """检查数据库是否为空"""
+        with self._get_conn() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM games")
+            count = cursor.fetchone()[0]
+            return count == 0
+
+
+    def _migrate_from_json(self):
+        """从旧的 JSON 文件迁移数据"""
+        try:
+            with open(self.json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            games_dict = data.get("games", {})
+            last_update = data.get("last_update", datetime.datetime.now().isoformat())
+            
+            with self._get_conn() as conn:
+                for app_id, game_data in games_dict.items():
+                    # 根据隐私设置决定迁移哪些数据
+                    save_names = self.config_model.get("save_game_names", False) if self.config_model else False
+                    save_extra = self.config_model.get("save_extra_data", False) if self.config_model else False
+                    
+                    game_name = game_data.get("game_name", "") if save_names else ""
+                    databases = json.dumps(game_data.get("databases", [])) if save_extra else "[]"
+                    is_unlocked = 1 if game_data.get("is_unlocked", False) else 0
+                    last_updated = game_data.get("last_updated", datetime.datetime.now().isoformat())
+                    
+                    extra_data = "{}"
+                    if save_extra:
+                        extra_data_dict = {k: v for k, v in game_data.items() 
+                                         if k not in ["app_id", "game_name", "databases", "is_unlocked", "last_updated"]}
+                        extra_data = json.dumps(extra_data_dict)
+                    
+                    conn.execute("""
+                        INSERT OR REPLACE INTO games (app_id, game_name, databases, is_unlocked, last_updated, extra_data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (app_id, game_name, databases, is_unlocked, last_updated, extra_data))
                 
-            # 保存到文件
-            self.save_data(silent=True)
+                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_update', ?)", (last_update,))
+                conn.commit()
             
-            print(f"创建了新的数据文件: {self.data_file}")
-        
-        # 始终保存一次，确保文件格式正确
-        else:
-            self.save_data(silent=True)
-    
-    def _validate_and_repair_data(self):
-        """验证并修复数据文件，确保数据完整性"""
-        try:
-            # 确保数据结构包含所有必要的字段
-            for key, value in self.default_data_structure.items():
-                if key not in self.games_data:
-                    self.games_data[key] = copy.deepcopy(value)
+            print(f"数据迁移完成，共迁移 {len(games_dict)} 条记录")
             
-            # 确保上次更新时间字段是有效的
-            if not isinstance(self.games_data.get("last_update"), str):
-                self.games_data["last_update"] = datetime.datetime.now().isoformat()
-            
-            # 确保games字段是字典类型
-            if not isinstance(self.games_data.get("games"), dict):
-                self.games_data["games"] = {}
-        except Exception as e:
-            print(f"数据验证错误: {e}")
-            # 如果验证过程中出现错误，使用默认数据结构
-            self.games_data = dict(self.default_data_structure)
-    
-    def _load_data(self) -> Dict[str, Any]:
-        """从本地文件加载数据
-        
-        Returns:
-            游戏数据字典
-        """
-        if not os.path.exists(self.data_file):
-            # 如果文件不存在，返回默认的数据结构
-            return dict(self.default_data_structure)
-            
-        try:
-            with open(self.data_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            # 如果JSON解析错误，尝试修复
-            return self._repair_json_file(self.data_file, e)
-        except Exception as e:
-            print(f"加载数据错误: {e}")
-            return dict(self.default_data_structure)
-    
-    def _repair_json_file(self, file_path: str, error: json.JSONDecodeError) -> Dict[str, Any]:
-        """尝试修复损坏的JSON文件
-        
-        Args:
-            file_path: 文件路径
-            error: JSON解析错误
-            
-        Returns:
-            修复后的数据或默认数据
-        """
-        print(f"尝试修复损坏的JSON文件: {file_path}, 错误: {error}")
-        
-        # 方法1: 尝试使用错误位置之前的内容
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+            # 迁移成功后，将旧文件重命名备份
+            backup_name = f"{self.json_file}.migrated.bak"
+            if not os.path.exists(backup_name):
+                os.rename(self.json_file, backup_name)
+                print(f"旧数据文件已重命名为 {backup_name}")
                 
-            # 截取错误位置之前的部分
-            valid_part = content[:error.pos]
-            # 尝试找到最后一个完整的JSON对象
-            last_brace_idx = valid_part.rfind("}")
-            if last_brace_idx > 0:
-                valid_part = valid_part[:last_brace_idx + 1]
-                # 尝试解析
-                try:
-                    data = json.loads(valid_part)
-                    # 确保结果是字典并包含必要的字段
-                    if isinstance(data, dict):
-                        result = dict(self.default_data_structure)
-                        # 合并有效的字段
-                        for key, value in data.items():
-                            if key in result:
-                                result[key] = value
-                        return result
-                except:
-                    pass
         except Exception as e:
-            print(f"修复方法1失败: {e}")
-        
-        # 方法2: 尝试读取最后一个有效的JSON结构
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-                
-            # 寻找最后一个有效的JSON结构
-            last_brace_pos = content.rfind("}")
-            if last_brace_pos > 0:
-                valid_part = content[:last_brace_pos + 1]
-                # 尝试解析
-                try:
-                    data = json.loads(valid_part)
-                    # 确保结果是字典并包含必要的字段
-                    if isinstance(data, dict):
-                        result = dict(self.default_data_structure)
-                        # 合并有效的字段
-                        for key, value in data.items():
-                            if key in result:
-                                result[key] = value
-                        return result
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"修复方法2失败: {e}")
-        
-        # 如果所有修复方法都失败，返回默认数据结构
-        print("无法修复数据文件，使用默认数据结构")
-        return dict(self.default_data_structure)
-        
+            print(f"迁移数据出错: {e}")
+
     def save_data(self, silent: bool = False) -> bool:
-        """保存数据到本地文件
-        
-        Args:
-            silent: 是否静默保存，不显示消息
-            
-        Returns:
-            是否保存成功
-        """
+        """保存数据（SQLite 版本中，主要用于更新全局 metadata 的时间戳）"""
         try:
-            # 更新保存时间
-            self.games_data["last_update"] = datetime.datetime.now().isoformat()
-            
-            # 打印调试信息
-            
-            # 先写入临时文件
-            temp_file = f"{self.data_file}.tmp"
-            with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(self.games_data, f, ensure_ascii=False, indent=2)
-                f.flush()  # 确保数据写入磁盘
-                
-            # 如果成功写入临时文件，再替换原文件
-            if os.path.exists(self.data_file):
-                # 创建备份
-                backup_file = f"{self.data_file}.bak"
-                try:
-                    shutil.copy2(self.data_file, backup_file)
-
-                except Exception as e:
-                    if not silent:
-                        print(f"创建备份失败: {e}")
-            
-            # 替换原文件
-            shutil.move(temp_file, self.data_file)
-            
-
-                
+            with self._get_conn() as conn:
+                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_update', ?)", 
+                            (datetime.datetime.now().isoformat(),))
+                conn.commit()
+            return True
         except Exception as e:
             if not silent:
-                print(f"保存数据失败: {str(e)}")
-                # 打印详细错误信息便于调试
-                import traceback
-                traceback.print_exc()
+                print(f"更新元数据失败: {e}")
             return False
-    
+
     def update_game(self, app_id: str, database_name: str = None, game_name: Optional[str] = None, 
                    is_unlocked: Optional[bool] = None, auto_save: bool = False, **kwargs) -> None:
-        """更新游戏信息，只更新指定的字段
-        
-        Args:
-            app_id: 游戏的AppID（必填）
-            database_name: 数据库名称，如果为None则不更新
-            game_name: 游戏名称，如果为None则不更新
-            is_unlocked: 是否已解锁，如果为None则不更新
-            auto_save: 是否自动保存到文件
-            **kwargs: 其他自定义字段
-        """
-        # 确保games字典存在
-        if "games" not in self.games_data:
-            self.games_data["games"] = {}
+        """更新游戏信息"""
+        try:
+            save_names = self.config_model.get("save_game_names", False) if self.config_model else False
+            save_extra = self.config_model.get("save_extra_data", False) if self.config_model else False
             
-        # 获取现有游戏数据或创建新的标准游戏数据结构
-        game = self.games_data["games"].get(app_id, {
-            "app_id": app_id,
-            "game_name": "",
-            "databases": [],
-            "is_unlocked": False,
-            "last_updated": datetime.datetime.now().isoformat()
-        })
-        
-        # 确保app_id字段存在（冗余存储，方便查询）
-        game["app_id"] = app_id
-        
-        # 更新数据库名称（如果提供了）
-        if database_name is not None:
-            databases = game.get("databases", [])
-            if database_name and database_name not in databases:
-                databases.append(database_name)
-                game["databases"] = databases
-            
-        # 更新游戏名称（如果提供了）
-        if game_name is not None and game_name.strip():
-            # 打印详细日志用于调试
-            old_name = game.get("game_name", "")
-            print(f"更新游戏名称 AppID={app_id}: '{old_name}' -> '{game_name}'")
-            game["game_name"] = game_name
+            with self._get_conn() as conn:
+                # 1. 获取现有数据
+                cursor = conn.execute("SELECT * FROM games WHERE app_id = ?", (app_id,))
+                row = cursor.fetchone()
                 
-        # 更新解锁状态（如果提供了）
-        if is_unlocked is not None:
-            game["is_unlocked"] = is_unlocked
-            
-        # 更新任何其他自定义字段
-        for key, value in kwargs.items():
-            if value is not None:
-                game[key] = value
-            
-        # 更新最后修改时间
-        game["last_updated"] = datetime.datetime.now().isoformat()
-        
-        # 保存回字典
-        self.games_data["games"][app_id] = game
-        
-        # 如果需要自动保存，则保存到文件
-        if auto_save:
-            self.save_data()
-    
+                if row:
+                    # 更新已有记录
+                    current_databases = json.loads(row['databases']) if row['databases'] else []
+                    if save_extra and database_name and database_name not in current_databases:
+                        current_databases.append(database_name)
+                    
+                    new_game_name = ""
+                    if save_names:
+                        new_game_name = game_name if game_name is not None else row['game_name']
+                        
+                    new_is_unlocked = (1 if is_unlocked else 0) if is_unlocked is not None else row['is_unlocked']
+                    new_databases = json.dumps(current_databases) if save_extra else "[]"
+                    
+                    # 合并 extra_data
+                    new_extra_data = "{}"
+                    if save_extra:
+                        extra_dict = json.loads(row['extra_data']) if row['extra_data'] else {}
+                        extra_dict.update(kwargs)
+                        new_extra_data = json.dumps(extra_dict)
+                else:
+                    # 创建新记录
+                    new_game_name = game_name if (save_names and game_name is not None) else ""
+                    new_is_unlocked = 1 if is_unlocked else 0
+                    new_databases = json.dumps([database_name] if (save_extra and database_name) else [])
+                    new_extra_data = json.dumps(kwargs if save_extra else {})
+
+                last_updated = datetime.datetime.now().isoformat()
+                
+                conn.execute("""
+                    INSERT OR REPLACE INTO games (app_id, game_name, databases, is_unlocked, last_updated, extra_data)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (app_id, new_game_name, new_databases, new_is_unlocked, last_updated, new_extra_data))
+                
+                # 更新元数据的时间戳
+                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_update', ?)", 
+                            (last_updated,))
+                conn.commit()
+        except Exception as e:
+            print(f"更新游戏 {app_id} 失败: {e}")
+
     def get_all_games(self) -> List[Dict[str, Any]]:
-        """获取所有游戏信息
-        
-        Returns:
-            游戏信息列表
-        """
-        games = []
-        for app_id, game_data in self.games_data.get("games", {}).items():
-            game = copy.deepcopy(game_data)
-            game["app_id"] = app_id
-            games.append(game)
-        return games
-    
-    def get_game(self, app_id: str) -> Optional[Dict[str, Any]]:
-        """获取指定AppID的游戏信息
-        
-        Args:
-            app_id: 游戏的AppID
-            
-        Returns:
-            游戏信息字典，如果不存在则返回None
-        """
-        game = self.games_data.get("games", {}).get(app_id)
-        if not game:
-            return None
-            
-        result = copy.deepcopy(game)
-        result["app_id"] = app_id
-        return result
-    
-    def set_unlock_status(self, app_id: str, is_unlocked: bool, auto_save: bool = False) -> None:
-        """设置游戏的解锁状态
-        
-        Args:
-            app_id: 游戏的AppID
-            is_unlocked: 是否已解锁
-            auto_save: 是否自动保存到文件
-        """
-        if "games" not in self.games_data:
-            self.games_data["games"] = {}
-            
-        if app_id in self.games_data["games"]:
-            self.games_data["games"][app_id]["is_unlocked"] = is_unlocked
-            
-            if auto_save:
-                self.save_data(silent=True)
+        """获取所有游戏信息"""
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute("SELECT * FROM games")
+                rows = cursor.fetchall()
                 
-    def batch_set_unlock_status(self, updates: List[str], auto_save: bool = True) -> int:
-        """批量设置多个游戏的解锁状态
-        
-        Args:
-            updates: 游戏更新列表，每项为app_id的元组
-            auto_save: 是否自动保存到文件
-            
-        Returns:
-            成功更新的游戏数量
-        """
-        if "games" not in self.games_data:
-            self.games_data["games"] = {}
-            
-        updated_count = 0
-        
-        # 批量更新所有游戏的解锁状态
-        for app_id in updates:
-            if app_id in self.games_data["games"]:
-                self.games_data["games"][app_id]["is_unlocked"] = True
-                updated_count += 1
-                
-        # 只保存一次数据，避免多次IO操作
-        if auto_save and updated_count > 0:
-            self.save_data(silent=True)
-            
-        return updated_count
-    
-    def update_games_from_branches(self, branches: List[Tuple[str, str]], silent: bool = False, auto_save: bool = False) -> None:
-        """从分支列表更新游戏数据
-        
-        Args:
-            branches: 分支列表，每个元素为(app_id, branch_name)的元组
-            silent: 是否静默更新，不显示消息
-            auto_save: 是否自动保存到文件
-        """
-        # 提取所有数据库名称
-        database_names = set()
-        for app_id, branch_name in branches:
-            parts = branch_name.split("/")
-            if len(parts) > 1:
-                database_name = parts[0]
-                database_names.add(database_name)
-        
-        if not database_names:
-            database_names = {"default"}
-        
-        # 更新游戏数据
-        updated_count = 0
-        for app_id, branch_name in branches:
-            # 从分支名称中提取仓库名称作为数据库名称
-            parts = branch_name.split("/")
-            database_name = parts[0] if len(parts) > 1 else next(iter(database_names))
-            
-            # 更新游戏信息，只传递需要更新的字段
-            self.update_game(
-                app_id=app_id, 
-                database_name=database_name,
-                auto_save=False
-            )
-            updated_count += 1
-            
-        # 保存数据
-        if auto_save:
-            self.save_data(silent=silent)
-            
-        if not silent:
-            print(f"已更新 {updated_count} 个游戏的数据")
-    
-    def get_game_databases(self, app_id: str) -> List[str]:
-        """获取游戏的数据库列表
-        
-        Args:
-            app_id: 游戏的AppID
-            
-        Returns:
-            数据库名称列表
-        """
-        game = self.get_game(app_id)
-        if not game:
+                games = []
+                for row in rows:
+                    game = {
+                        "app_id": row['app_id'],
+                        "game_name": row['game_name'],
+                        "databases": json.loads(row['databases']) if row['databases'] else [],
+                        "is_unlocked": bool(row['is_unlocked']),
+                        "last_updated": row['last_updated']
+                    }
+                    # 合并额外数据
+                    if row['extra_data']:
+                        extra = json.loads(row['extra_data'])
+                        game.update(extra)
+                    games.append(game)
+                return games
+        except Exception as e:
+            print(f"查询所有游戏失败: {e}")
             return []
-        
-        return game.get("databases", [])
-    
-    def get_steam_game_names(self, app_ids: List[str]) -> Dict[str, str]:
-        """获取游戏名称
-        
-        Args:
-            app_ids: AppID列表
+
+    def get_game(self, app_id: str) -> Optional[Dict[str, Any]]:
+        """获取指定AppID的游戏信息"""
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute("SELECT * FROM games WHERE app_id = ?", (app_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                game = {
+                    "app_id": row['app_id'],
+                    "game_name": row['game_name'],
+                    "databases": json.loads(row['databases']) if row['databases'] else [],
+                    "is_unlocked": bool(row['is_unlocked']),
+                    "last_updated": row['last_updated']
+                }
+                if row['extra_data']:
+                    game.update(json.loads(row['extra_data']))
+                return game
+        except Exception as e:
+            print(f"查询游戏 {app_id} 失败: {e}")
+            return None
+
+    def set_unlock_status(self, app_id: str, is_unlocked: bool, auto_save: bool = False) -> None:
+        """设置游戏的解锁状态"""
+        try:
+            with self._get_conn() as conn:
+                last_updated = datetime.datetime.now().isoformat()
+                conn.execute(
+                    "UPDATE games SET is_unlocked = ?, last_updated = ? WHERE app_id = ?",
+                    (1 if is_unlocked else 0, last_updated, app_id)
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            print(f"数据库错误 (set_unlock_status): {e}")
+
+    def batch_set_unlock_status(self, updates: List[Tuple[str, bool]], auto_save: bool = True) -> int:
+        """批量设置游戏的解锁状态 (高性能事务)"""
+        if not updates:
+            return 0
+        try:
+            with self._get_conn() as conn:
+                last_updated = datetime.datetime.now().isoformat()
+                # 使用 executemany 进行批量更新
+                cursor = conn.executemany(
+                    "UPDATE games SET is_unlocked = ?, last_updated = ? WHERE app_id = ?",
+                    [(1 if unlocked else 0, last_updated, app_id) for app_id, unlocked in updates]
+                )
+                
+                # 如果是新增状态，上述 UPDATE 可能影响 0 行，但此处我们主要负责更新现有项的状态
+                # 如果业务逻辑需要，可以配合 INSERT OR IGNORE
+                
+                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_update', ?)", 
+                            (last_updated,))
+                conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            print(f"数据库错误 (batch_set_unlock_status): {e}")
+            return 0
             
-        Returns:
-            以AppID为键，游戏名称为值的字典
-        """
+    def batch_add_unlocked_games(self, app_ids: List[str]) -> None:
+        """批量添加新发现的已解锁游戏 (高性能事务)"""
+        if not app_ids:
+            return
+        try:
+            save_names = self.config_model.get("save_game_names", False) if self.config_model else False
+            save_extra = self.config_model.get("save_extra_data", False) if self.config_model else False
+            
+            with self._get_conn() as conn:
+                last_updated = datetime.datetime.now().isoformat()
+                for app_id in app_ids:
+                    game_name = f"已解锁游戏 {app_id}" if save_names else ""
+                    databases = "[]"
+                    is_unlocked = 1
+                    extra_data = "{}"
+                    
+                    conn.execute("""
+                        INSERT OR IGNORE INTO games (app_id, game_name, databases, is_unlocked, last_updated, extra_data)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (app_id, game_name, databases, is_unlocked, last_updated, extra_data))
+                conn.commit()
+        except sqlite3.Error as e:
+            print(f"数据库错误 (batch_add_unlocked_games): {e}")
+
+
+    def update_games_from_branches(self, branches: List[Tuple[str, str]], silent: bool = False, auto_save: bool = False) -> None:
+        """从分支列表通过事务批量更新游戏数据"""
+        try:
+            with self._get_conn() as conn:
+                last_updated = datetime.datetime.now().isoformat()
+                
+                # 预先获取现有数据以减少循环内的查询（对于大规模数据，可进一步优化）
+                # 这里使用简单的处理方式，SQLite 事务本身已经很快了
+                for app_id, branch_name in branches:
+                    parts = branch_name.split("/")
+                    database_name = parts[0] if len(parts) > 1 else "default"
+                    
+                    # 检查是否存在
+                    cursor = conn.execute("SELECT databases, extra_data FROM games WHERE app_id = ?", (app_id,))
+                    row = cursor.fetchone()
+                    
+                    if row:
+                        current_databases = json.loads(row['databases']) if row['databases'] else []
+                        if database_name not in current_databases:
+                            current_databases.append(database_name)
+                        new_databases = json.dumps(current_databases)
+                        
+                        conn.execute("""
+                            UPDATE games SET databases = ?, last_updated = ? WHERE app_id = ?
+                        """, (new_databases, last_updated, app_id))
+                    else:
+                        conn.execute("""
+                            INSERT INTO games (app_id, game_name, databases, is_unlocked, last_updated, extra_data)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (app_id, "", json.dumps([database_name]), 0, last_updated, json.dumps({})))
+                
+                conn.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_update', ?)", 
+                            (last_updated,))
+                conn.commit()
+                
+            if not silent:
+                print(f"批量更新完成，更新了 {len(branches)} 个分支数据")
+        except Exception as e:
+            print(f"批量从分支更新失败: {e}")
+
+    def get_game_databases(self, app_id: str) -> List[str]:
+        """获取游戏的数据库列表"""
+        game = self.get_game(app_id)
+        return game.get("databases", []) if game else []
+
+    def get_steam_game_names(self, app_ids: List[str]) -> Dict[str, str]:
+        """获取游戏名称"""
         game_names = {}
-        
-        # 将已有的游戏名称添加到结果中
-        for app_id in app_ids:
-            game = self.get_game(app_id)
-            if game:
-                game_names[app_id] = game.get("game_name", f"Game {app_id}")
-        
-        return game_names
-    
+        try:
+            with self._get_conn() as conn:
+                # 批量查询
+                placeholders = ','.join(['?'] * len(app_ids))
+                cursor = conn.execute(f"SELECT app_id, game_name FROM games WHERE app_id IN ({placeholders})", app_ids)
+                for row in cursor:
+                    game_names[row['app_id']] = row['game_name'] if row['game_name'] else f"Game {row['app_id']}"
+            return game_names
+        except Exception:
+            return {app_id: f"Game {app_id}" for app_id in app_ids}
+
     def get_last_update(self) -> Optional[str]:
-        """获取最后更新时间
-        
-        Returns:
-            最后更新时间的ISO格式字符串，如果不存在则返回None
-        """
-        return self.games_data.get("last_update") 
+        """获取最后更新时间"""
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute("SELECT value FROM metadata WHERE key = 'last_update'")
+                row = cursor.fetchone()
+                return row[0] if row else None
+        except:
+            return None

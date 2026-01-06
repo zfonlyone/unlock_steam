@@ -34,117 +34,138 @@ class GitController(QObject):
         self.operationFinished.connect(self.handle_operation_completed)
     
     def update_branch_list(self):
-        """更新分支列表"""
+        """更新分支列表，支持多仓库同步"""
         # 检查配置是否有效
         if not self.config_model.is_valid_config():
             QMessageBox.warning(
                 self.view, 
                 "配置错误", 
-                "配置无效，请先配置清单仓库路径。"
+                "配置无效，请先配置Steam路径。"
             )
             return
         
-        # 确保git_model使用最新的仓库路径
-        repo_path = self.config_model.get("manifest_repo_path", "")
-        # 标准化路径
-        repo_path = os.path.normpath(repo_path) if repo_path else ""
+        # 获取所有启用的仓库
+        enabled_repos_raw = self.config_model.get_enabled_repositories()
         
-        if repo_path != self.git_model.repo_path:
-            self.git_model.repo_path = repo_path
+        # 兼容逻辑：如果用户设置了本地路径，优先使用本地路径，而不是默认远程仓库
+        legacy_path = self.config_model.get("manifest_repo_path", "")
+        if legacy_path and os.path.exists(os.path.join(legacy_path, ".git")):
+            # 如果只有默认的 ManifestHub 远程仓库，替换为用户的本地仓库
+            if len(enabled_repos_raw) == 1 and enabled_repos_raw[0].get("name") == "ManifestHub":
+                enabled_repos_raw = [{"name": "LocalRepo", "type": "local", "path": legacy_path, "enabled": True}]
+                print(f"[GitController] 使用用户配置的本地仓库: {legacy_path}")
         
+        # 去重：按名称去重，防止重复处理
+        seen_names = set()
+        unique_repos = []
+        for repo in enabled_repos_raw:
+            name = repo.get("name", "Unknown")
+            if name not in seen_names:
+                seen_names.add(name)
+                unique_repos.append(repo)
+        enabled_repos_raw = unique_repos
+        
+        print(f"[GitController] 待处理仓库列表: {[r.get('name') for r in enabled_repos_raw]}")
+            
+        if not enabled_repos_raw:
+
+            QMessageBox.warning(
+                self.view,
+                "未配置仓库",
+                "请先在设置中添加并启用至少一个清单仓库。"
+            )
+            return
+            
         # 显示确认对话框
         result = QMessageBox.question(
             self.view,
             "确认更新",
-            "更新分支列表可能需要一些时间，是否继续？",
+            f"将从 {len(enabled_repos_raw)} 个仓库获取分支信息，这可能需要一些时间，是否继续？",
             QMessageBox.Yes | QMessageBox.No
         )
         
         if result != QMessageBox.Yes:
             return
         
-        # 禁用按钮，避免重复操作
+        # 禁用按钮
         self.view.enable_buttons(False)
-        
-        # 显示进度信息
-        self.view.set_status("正在获取仓库分支信息...")
+        self.view.set_status("正在准备同步仓库...")
         
         # 创建进度对话框
-        progress_dialog = QProgressDialog("正在更新分支列表...", "取消", 0, 100, self.view)
-        progress_dialog.setWindowTitle("更新进度")
+        progress_dialog = QProgressDialog("正在准备同步数据...", "取消", 0, 100, self.view)
+        progress_dialog.setWindowTitle("数据同步中")
         progress_dialog.setModal(True)
+        progress_dialog.setMinimumDuration(0)
         progress_dialog.show()
         
-        # 连接取消按钮信号
-        progress_dialog.canceled.connect(self.cancel_operation)
-        
-        # 导入线程模块
         import threading
         
-        # 定义任务函数
-        def fetch_branches_task():
+        def fetch_task():
             try:
-                # 设置进度
-                self.progressUpdated.emit("正在获取分支信息...", 10)
+                all_aggregated_branches = []
+                total_repos = len(enabled_repos_raw)
                 
-                # 获取仓库路径
-                repo_path = self.config_model.get("manifest_repo_path", "")
+                for i, repo in enumerate(enabled_repos_raw):
+                    repo_name = repo.get("name", "Unknown")
+                    repo_path = repo.get("path", "")
+                    repo_type = repo.get("type", "local")
+                    repo_url = repo.get("url", "")
+                    
+                    self.progressUpdated.emit(f"正在处理仓库: {repo_name}...", int((i / total_repos) * 100))
+                    
+                    branches = []
+                    
+                    # 优先使用远程直接获取（无需克隆）
+                    if repo_type == "remote" and repo_url:
+                        print(f"[GitController] 直接从远程获取分支: {repo_url}")
+                        self.progressUpdated.emit(f"正在从远程获取: {repo_name}...", int((i / total_repos) * 100))
+                        branches = self.git_model.fetch_remote_branches(repo_url)
+                    elif repo_path:
+                        # 本地仓库：使用传统方式
+                        abs_repo_path = os.path.abspath(repo_path)
+                        if os.path.exists(os.path.join(abs_repo_path, ".git")):
+                            self.git_model.repo_path = abs_repo_path
+                            self.progressUpdated.emit(f"正在扫描本地仓库: {repo_name}...", int((i / total_repos) * 100))
+                            print(f"[GitController] 正在扫描本地仓库: {abs_repo_path}")
+                            branches = self.git_model.fetch_branches(use_cache=False, sync=True)
+                        else:
+                            print(f"跳过无效本地仓库: {repo_name} ({abs_repo_path})")
+                            continue
+                    else:
+                        print(f"跳过无效仓库配置: {repo_name}")
+                        continue
+                    
+                    # 给分支名加上仓库标识
+                    prefixed_branches = [(app_id, f"{repo_name}/{branch}") for app_id, branch in branches]
+                    all_aggregated_branches.extend(prefixed_branches)
+                    print(f"[GitController] 仓库 {repo_name} 获取了 {len(branches)} 个分支")
                 
-                # 获取分支列表 - 修改这里，设置一个很大的batch_size以获取全部分支
-                branches = self.git_model.fetch_branches(use_cache=False, batch_size=100000)
+                if not all_aggregated_branches and total_repos > 0:
+                    msg = "扫描完成，但未发现任何以 AppID 命名的分支。请确认仓库配置是否包含 AppID 分支。"
+                    self.operationFinished.emit(False, msg)
+                    return
+
+                # 更新游戏数据
+                self.progressUpdated.emit(f"正在向数据库同步 {len(all_aggregated_branches)} 条记录...", 85)
+                self.data_model.update_games_from_branches(all_aggregated_branches, auto_save=True)
                 
-                # 设置进度
-                self.progressUpdated.emit("正在更新游戏数据...", 50)
-                
-                # 更新游戏数据，确保保存到文件
-                self.data_model.update_games_from_branches(branches, auto_save=True)
-                
-                # 强制重新加载数据，确保使用最新的格式
-                if os.path.exists(self.data_model.data_file):
-                    # 重新从文件加载数据
-                    with open(self.data_model.data_file, "r", encoding="utf-8") as f:
-                        try:
-                            self.data_model.games_data = json.load(f)
-                            # 验证并修复数据
-                            self.data_model._validate_and_repair_data()
-                        except Exception as e:
-                            self.operationFinished.emit(False, f"加载数据文件失败: {str(e)}")
-                            return
-                
-                # 获取所有游戏
+                # 重新加载并显示最新数据
+                self.progressUpdated.emit("正在刷新界面显示...", 95)
                 games = self.data_model.get_all_games()
-                
-                # 设置进度
-                self.progressUpdated.emit("正在更新界面...", 90)
-                
-                # 在主线程中更新UI
                 QTimer.singleShot(0, lambda: self.view.update_table(games))
                 
-                # 成功消息，强调下一步操作
-                success_message = f"分支列表更新完成，共添加/更新了{len(branches)}个分支。\n\n"
-                if len(branches) > 0:
-                    success_message += "数据已保存到games_data.json文件。\n如需刷新界面显示，请点击'刷新显示'按钮。"
-                else:
-                    success_message += "未发现任何游戏分支，请检查清单仓库是否正确。"
-                
-                # 完成操作
-                self.operationFinished.emit(True, success_message)
-                
-                # 关闭进度对话框
-                if progress_dialog and progress_dialog.isVisible():
-                    QTimer.singleShot(0, progress_dialog.close)
+                msg = f"更新完成：共从 {total_repos} 个仓库获取了 {len(all_aggregated_branches)} 个分支。"
+                self.operationFinished.emit(True, msg)
                 
             except Exception as e:
-                # 发送错误信号
-                self.operationFinished.emit(False, f"更新分支列表失败: {str(e)}")
-                
-                # 关闭进度对话框
-                if progress_dialog and progress_dialog.isVisible():
-                    QTimer.singleShot(0, progress_dialog.close)
+                import traceback
+                traceback.print_exc()
+                self.operationFinished.emit(False, f"同步发生未知异常: {str(e)}")
+            finally:
+                QTimer.singleShot(0, progress_dialog.close)
         
-        # 在单独的线程中运行任务
-        thread = threading.Thread(target=fetch_branches_task)
-        thread.start()
+        threading.Thread(target=fetch_task, daemon=True).start()
+    
     
     def cancel_operation(self):
         """取消操作"""

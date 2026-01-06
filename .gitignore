@@ -17,6 +17,8 @@ config.json
 
 # 临时文件夹和生成的文件
 temp/
+例子/
+data/cache/
 steamunlock_temp/
 *.manifest
 *.vdf
@@ -31,6 +33,7 @@ steamunlock_temp/
 *secret*
 *api_key*
 *auth*
+*.db
 
 # 截图和媒体文件（可能包含个人信息）
 screenshots/
@@ -52,7 +55,7 @@ Thumbs.db
 desktop.ini
 
 # 其他可能包含敏感信息的文件
-*.lua
+#*.lua
 
 # 临时脚本和测试文件
 test_*.py
@@ -63,13 +66,11 @@ test_*.py
 build/
 dist/
 *.spec
-*.manifest
 *.exe
 *.pyc
 *.pyd
 *.pyz
 *.pyw
-*.manifest
 *.spec
 *.pkg
 *.dmg
