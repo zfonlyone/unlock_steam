@@ -52,6 +52,7 @@ class UnlockController(QObject):
         self.view.toolFindNoManifestRequested.connect(lambda: self.run_tool("find_no_manifest.py"))
         self.view.toolCleanInvalidLuaRequested.connect(lambda: self.run_tool("clean_invalid_lua.py"))
         self.view.toolFixFormatsRequested.connect(lambda: self.run_tool("fix_lua_formats.py"))
+        self.view.fetchAllDlcRequested.connect(self.fetch_all_dlc)
         
         # 连接菜单动作信号
         # 连接菜单动作信号
@@ -762,4 +763,76 @@ class UnlockController(QObject):
                 QTimer.singleShot(0, lambda: self.view.set_status(f"更新清单失败: {e}"))
 
         threading.Thread(target=lambda: asyncio.run(fetch()), daemon=True).start()
+
+    def fetch_and_add_dlc(self, app_id: str):
+        """获取单个游戏的 DLC 并添加到 Lua 文件
+        
+        Args:
+            app_id: 游戏 App ID
+        """
+        steam_path = self.unlock_model.get_steam_path()
+        lua_dir = str(steam_path / "config" / "stplug-in")
+        
+        self.view.set_status(f"正在获取游戏 {app_id} 的 DLC 列表...")
+        
+        def run():
+            try:
+                from fetch_dlc import run_fetch_single
+                
+                def progress_callback(msg):
+                    QTimer.singleShot(0, lambda m=msg: self.view.set_status(f"[DLC] {m}"))
+                
+                result = run_fetch_single(app_id, lua_dir, progress_callback)
+                
+                # 显示结果
+                message = result.get("message", "完成")
+                self.toolCompleted.emit(f"获取DLC ({app_id})", message, result.get("success", False))
+                
+            except Exception as e:
+                error_msg = f"获取 DLC 失败: {str(e)}"
+                import traceback
+                traceback.print_exc()
+                self.toolCompleted.emit(f"获取DLC ({app_id})", error_msg, False)
+        
+        threading.Thread(target=run, daemon=True).start()
+
+    def fetch_all_dlc(self):
+        """批量获取所有游戏的 DLC 并添加到 Lua 文件"""
+        steam_path = self.unlock_model.get_steam_path()
+        lua_dir = str(steam_path / "config" / "stplug-in")
+        
+        # 确认操作
+        result = QMessageBox.question(
+            self.view,
+            "一键获取所有 DLC",
+            "将为所有已解锁的游戏获取 DLC 列表并添加到 Lua 文件。\n\n"
+            "这可能需要一些时间，是否继续？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if result != QMessageBox.Yes:
+            return
+        
+        self.view.set_status("正在批量获取所有游戏的 DLC...")
+        
+        def run():
+            try:
+                from fetch_dlc import run_fetch_all
+                
+                def progress_callback(msg):
+                    QTimer.singleShot(0, lambda m=msg: self.view.set_status(f"[批量DLC] {m}"))
+                
+                result = run_fetch_all(lua_dir, progress_callback)
+                
+                # 显示结果
+                message = result.get("message", "完成")
+                self.toolCompleted.emit("批量获取DLC", message, result.get("success", False))
+                
+            except Exception as e:
+                error_msg = f"批量获取 DLC 失败: {str(e)}"
+                import traceback
+                traceback.print_exc()
+                self.toolCompleted.emit("批量获取DLC", error_msg, False)
+        
+        threading.Thread(target=run, daemon=True).start()
  

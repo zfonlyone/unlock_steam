@@ -1,0 +1,131 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+      should_release: ${{ steps.extract.outputs.should_release }}
+    steps:
+      - name: Extract version from commit message
+        id: extract
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          # 匹配 vX.X.X 格式的版本号
+          if [[ "$COMMIT_MSG" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            VERSION="${BASH_REMATCH[0]}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "检测到版本号: $VERSION"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "未检测到版本号，跳过构建"
+          fi
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+
+      - name: Build Go downloader
+        run: |
+          cd tools/downloader
+          go build -ldflags "-s -w" -o ../../downloader.exe main.go
+
+      - name: Build main application
+        run: |
+          python scripts/build.py
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          $version = "${{ needs.check-version.outputs.version }}"
+          # 复制主程序
+          Copy-Item "dist/SteamGameUnlocker-*.exe" "release/SteamGameUnlocker-$version.exe"
+          # 复制下载器
+          if (Test-Path "downloader.exe") {
+            Copy-Item "downloader.exe" "release/downloader.exe"
+          }
+        shell: pwsh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SteamGameUnlocker-${{ needs.check-version.outputs.version }}
+          path: release/
+          retention-days: 30
+
+  release:
+    needs: [check-version, build]
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: SteamGameUnlocker-${{ needs.check-version.outputs.version }}
+          path: release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: Steam Game Unlocker ${{ needs.check-version.outputs.version }}
+          body: |
+            ## 下载说明
+
+            请下载以下两个文件到**同一目录**：
+
+            - `SteamGameUnlocker-${{ needs.check-version.outputs.version }}.exe` - 主程序
+            - `downloader.exe` - 高速下载器
+
+            > ⚠️ **重要**：两个文件必须放在同一目录下，否则下载功能可能受限。
+
+            ### 运行方式
+            双击 `SteamGameUnlocker-${{ needs.check-version.outputs.version }}.exe` 启动程序。
+
+            ---
+
+            ## Download Instructions
+
+            Please download the following two files to the **same directory**:
+
+            - `SteamGameUnlocker-${{ needs.check-version.outputs.version }}.exe` - Main application
+            - `downloader.exe` - High-speed downloader
+
+            > ⚠️ **Important**: Both files must be in the same directory for full functionality.
+
+            ### How to Run
+            Double-click `SteamGameUnlocker-${{ needs.check-version.outputs.version }}.exe` to start.
+          files: |
+            release/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

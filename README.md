@@ -11,7 +11,7 @@
 
 ## 版本信息
 
-- **当前版本**: v2.2.0
+- **当前版本**: v2.3.0
 - **作者**: zfonlyone
 - **许可证**: GPL-3.0
 - **项目主页**: [GitHub](https://github.com/zfonlyone/unlock_steam)
@@ -72,10 +72,17 @@
 2. 批量复制所有关联清单文件到 `depotcache`。
 3. 调用 `luapacka.exe` 将 Lua 脚本编译为可在 Steam 中生效的格式。
 
-## 安装与使用
+## 下载与运行
 
-### 重要安全提示
-本程序包含完整性验证机制。**请勿修改**程序核心文件，建议仅从官方仓库下载。
+### 从 Release 下载 (推荐)
+
+1. 前往 [Releases](../../releases/latest) 页面
+2. 下载以下两个文件到**同一目录**：
+   - `SteamGameUnlocker-vX.X.X.exe` (主程序)
+   - `downloader.exe` (高速下载器)
+3. 双击 `SteamGameUnlocker-vX.X.X.exe` 启动
+
+> ⚠️ **重要**：两个文件必须放在同一目录下，否则下载功能可能受限。
 
 ### 源码运行
 1. 安装 Python 3.7+ 和 Git。

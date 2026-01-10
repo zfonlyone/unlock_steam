@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
     toolFindNoManifestRequested = pyqtSignal()
     toolCleanInvalidLuaRequested = pyqtSignal()  # 清理无效 Lua 文件
     toolFixFormatsRequested = pyqtSignal()
+    fetchAllDlcRequested = pyqtSignal()  # 一键获取所有 DLC
     
     # 更多右键菜单动作
     updateManifestRequested = pyqtSignal(object)  # 更新清单请求
@@ -173,7 +174,7 @@ class MainWindow(QMainWindow):
         
     def setup_ui(self):
         """设置UI界面"""
-        self.setWindowTitle("Steam 游戏解锁管理工具 v2.0.5")
+        self.setWindowTitle("Steam 游戏解锁管理工具 v2.3.0")
         self.resize(1000, 700)
         
         # 设置应用程序图标 - 指向项目根目录中的 app_icon.png
@@ -263,7 +264,11 @@ class MainWindow(QMainWindow):
         fix_formats_btn.setToolTip("优化 Lua 格式 (移除 None，修正标帜)")
         fix_formats_btn.clicked.connect(self.toolFixFormatsRequested.emit)
         
-        for btn in [get_names_btn, check_appid_btn, disable_man_btn, enable_man_btn, find_no_man_btn, clean_lua_btn, fix_formats_btn]:
+        fetch_dlc_btn = QPushButton("📦 获取DLC")
+        fetch_dlc_btn.setToolTip("一键为所有游戏获取并添加 DLC")
+        fetch_dlc_btn.clicked.connect(self.fetchAllDlcRequested.emit)
+        
+        for btn in [get_names_btn, check_appid_btn, disable_man_btn, enable_man_btn, find_no_man_btn, clean_lua_btn, fix_formats_btn, fetch_dlc_btn]:
 
             btn.setObjectName("tool_btn")
             btn.setCursor(Qt.PointingHandCursor)

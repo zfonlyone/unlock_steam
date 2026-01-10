@@ -11,7 +11,7 @@ A powerful tool for managing and unlocking Steam games. It retrieves game manife
 
 ## Version Information
 
-- **Current Version**: v2.2.0
+- **Current Version**: v2.3.0
 - **Author**: zfonlyone
 - **License**: GPL-3.0
 - **Project Home**: [GitHub](https://github.com/zfonlyone/unlock_steam)
@@ -72,10 +72,17 @@ The program automatically selects the best path based on available files:
 2. Copy all associated manifest files to `depotcache`.
 3. Invoke `luapacka.exe` to compile the Lua script into a format compatible with Steam.
 
-## Installation & Usage
+## Download & Run
 
-### Security Note
-This program includes integrity verification. **Do not modify** core files. It is recommended to download only from the official repository.
+### Download from Release (Recommended)
+
+1. Go to the [Releases](../../releases/latest) page
+2. Download the following two files to the **same directory**:
+   - `SteamGameUnlocker-vX.X.X.exe` (Main application)
+   - `downloader.exe` (High-speed downloader)
+3. Double-click `SteamGameUnlocker-vX.X.X.exe` to start
+
+> ⚠️ **Important**: Both files must be in the same directory for full functionality.
 
 ### Running from Source
 1. Install Python 3.7+ and Git.
