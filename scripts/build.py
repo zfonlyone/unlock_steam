@@ -1,33 +1,40 @@
 """
-打包脚本 - 将应用程序打包为exe文件
-使用方法: python build.py
+Build Script - Package application into exe
+Usage: python build.py
 
-特性:
-- 自动安装缺失的依赖
-- 自动检测并处理 DLL 问题
-- 自动编译 Go 下载器 (如果安装了 Go)
-- 兼容多种 Python 环境
+Features:
+- Auto-install missing dependencies
+- Auto-detect and handle DLL issues
+- Auto-compile Go downloader (if Go installed)
+- Compatible with various Python environments
 """
 import os
 import sys
 import shutil
 import subprocess
 import re
+import io
 from datetime import datetime
 from pathlib import Path
 
+# Fix encoding for Windows CI (cp1252 -> utf-8)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # 项目版本信息
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 BUILD_DATE = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 AUTHOR = "zfonlyone"
 COPYRIGHT = f"Copyright © {datetime.now().year} zfonlyone. All rights reserved."
 
-# 需要的依赖列表
+# Required packages
 REQUIRED_PACKAGES = [
     "pyinstaller",
     "PyQt5",
     "aiohttp",
     "aiofiles",
+    "requests",
 ]
 
 
@@ -280,6 +287,7 @@ VSVersionInfo(
         ("tools/clean_invalid_lua.py", "tools"),
         ("tools/recover_manifests_from_lua.py", "tools"),
         ("tools/fix_lua_formats.py", "tools"),
+        ("tools/fetch_dlc.py", "tools"),
     ]
 
     for src, dst in data_files:

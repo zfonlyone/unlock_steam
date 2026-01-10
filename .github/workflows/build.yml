@@ -56,9 +56,19 @@ jobs:
           cd tools/downloader
           go build -ldflags "-s -w" -o ../../downloader.exe main.go
 
+      - name: Update version in build script
+        run: |
+          $version = "${{ needs.check-version.outputs.version }}"
+          $versionNum = $version -replace '^v', ''
+          (Get-Content scripts/build.py) -replace 'VERSION = "[^"]*"', "VERSION = `"$versionNum`"" | Set-Content scripts/build.py
+          Write-Host "Updated VERSION to $versionNum"
+        shell: pwsh
+
       - name: Build main application
         run: |
           python scripts/build.py
+        env:
+          PYTHONIOENCODING: utf-8
 
       - name: Prepare release files
         run: |
