@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
     configRequested = pyqtSignal()  # 配置请求
     aboutRequested = pyqtSignal()  # 关于请求
     batchUnlockRequested = pyqtSignal()  # 一键解锁请求
+    batchUnlockLiteRequested = pyqtSignal()  # 一键解锁Lite（仅Lua）
     themeChanged = pyqtSignal(str)  # 主题切换信号 (dark/light)
     syncRequested = pyqtSignal(list) # 增量同步请求
     
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
     toolCleanInvalidLuaRequested = pyqtSignal()  # 清理无效 Lua 文件
     toolFixFormatsRequested = pyqtSignal()
     fetchAllDlcRequested = pyqtSignal()  # 一键获取所有 DLC
+    completeAllManifestsRequested = pyqtSignal()  # 一键补全清单
     
     # 更多右键菜单动作
     updateManifestRequested = pyqtSignal(object)  # 更新清单请求
@@ -130,7 +132,7 @@ class MainWindow(QMainWindow):
         
         QPushButton#batch_unlock_btn { background-color: #89b4fa; color: #11111b; }
         QPushButton#update_list_btn { background-color: #94e2d5; color: #11111b; }
-        QPushButton#theme_toggle_btn { background-color: #f5e0dc; color: #11111b; min-width: 40px; }
+        QPushButton#theme_toggle_btn { background-color: #f9e2af; color: #1e1e2e; min-width: 40px; max-width: 40px; font-size: 16px; padding: 4px 8px; }
         QTableView { background-color: #181825; alternate-background-color: #1e1e2e; color: #cdd6f4; border: 1px solid #313244; gridline-color: #313244; }
         QHeaderView::section { background-color: #11111b; color: #bac2de; padding: 8px; border: none; font-weight: bold; }
         QStatusBar { background-color: #11111b; color: #a6adc8; }
@@ -159,7 +161,7 @@ class MainWindow(QMainWindow):
         
         QPushButton#batch_unlock_btn { background-color: #0d6efd; color: #ffffff; }
         QPushButton#update_list_btn { background-color: #198754; color: #ffffff; }
-        QPushButton#theme_toggle_btn { background-color: #ffc107; color: #212529; min-width: 40px; }
+        QPushButton#theme_toggle_btn { background-color: #ffc107; color: #212529; min-width: 40px; max-width: 40px; font-size: 16px; padding: 4px 8px; }
         QTableView { background-color: #ffffff; alternate-background-color: #f8f9fa; color: #212529; border: 1px solid #dee2da; gridline-color: #dee2da; }
         QHeaderView::section { background-color: #e9ecef; color: #495057; padding: 8px; border: none; font-weight: bold; }
         QStatusBar { background-color: #f8f9fa; color: #6c757d; }
@@ -174,7 +176,7 @@ class MainWindow(QMainWindow):
         
     def setup_ui(self):
         """设置UI界面"""
-        self.setWindowTitle("Steam 游戏解锁管理工具 v2.3.0")
+        self.setWindowTitle("Steam 游戏解锁管理工具 v2.4.0")
         self.resize(1000, 700)
         
         # 设置应用程序图标 - 指向项目根目录中的 app_icon.png
@@ -191,102 +193,30 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(15)
         
-        # 顶部布局
+        # 顶部布局：搜索框 + 刷新按钮
         top_layout = QHBoxLayout()
         top_layout.setSpacing(10)
         
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("输入 AppID、游戏名称或 Steam 链接...")
+        self.search_input.returnPressed.connect(self._on_search)
+        top_layout.addWidget(self.search_input, 1)  # 占用剩余空间
+        
         refresh_btn = QPushButton("刷新显示")
+        refresh_btn.setObjectName("primary_btn")
         refresh_btn.setCursor(Qt.PointingHandCursor)
         refresh_btn.clicked.connect(self._on_refresh_display)
+        top_layout.addWidget(refresh_btn)
         
-        check_unlock_btn = QPushButton("检查解锁状态")
-        check_unlock_btn.setCursor(Qt.PointingHandCursor)
-        check_unlock_btn.clicked.connect(self._on_check_unlock_status)
-        
-        get_names_btn = QPushButton("获取名称")
-        get_names_btn.setCursor(Qt.PointingHandCursor)
-        get_names_btn.clicked.connect(self._on_fetch_game_names)
-        
-        update_list_btn = QPushButton("拉取清单库")
-        update_list_btn.setObjectName("update_list_btn")
-        update_list_btn.setCursor(Qt.PointingHandCursor)
-        update_list_btn.clicked.connect(self._on_update_list)
-        
-        batch_unlock_btn = QPushButton("一键解锁")
-        batch_unlock_btn.setObjectName("batch_unlock_btn")
-        batch_unlock_btn.setCursor(Qt.PointingHandCursor)
-        batch_unlock_btn.clicked.connect(self._on_batch_unlock)
-        batch_unlock_btn.setToolTip("扫描并解锁所有未解锁的游戏")
-        
-        self.theme_btn = QPushButton("🌙")
+        # 主题切换按钮（放在刷新按钮后面）
+        self.theme_btn = QPushButton("☼")
         self.theme_btn.setObjectName("theme_toggle_btn")
         self.theme_btn.setToolTip("切换明亮/暗色模式")
+        self.theme_btn.setCursor(Qt.PointingHandCursor)
         self.theme_btn.clicked.connect(self._toggle_theme)
         top_layout.addWidget(self.theme_btn)
-
-        # 核心操作按钮
-        top_layout.addWidget(refresh_btn)
-        top_layout.addWidget(check_unlock_btn)
-        top_layout.addWidget(update_list_btn)
-        top_layout.addWidget(batch_unlock_btn)
         
         main_layout.addLayout(top_layout)
-        
-        # 工具栏第二行：高级管理与名称获取
-        tools_layout = QHBoxLayout()
-        tools_layout.setSpacing(10)
-        
-        get_names_btn = QPushButton("🏷️ 获取名称")
-        get_names_btn.setToolTip("从 API 补充缺失的名称")
-        get_names_btn.clicked.connect(self._on_fetch_game_names)
-        
-        check_appid_btn = QPushButton("🔍 校验lua")
-        check_appid_btn.setToolTip("检查 Lua 参数非法字符")
-        check_appid_btn.clicked.connect(self.toolCheckAddAppIDRequested.emit)
-        
-        disable_man_btn = QPushButton("🔒 禁用固定清单")
-        disable_man_btn.setToolTip("批量注释 setManifestid 以禁用固定清单")
-        disable_man_btn.clicked.connect(self.toolReplaceManifestRequested.emit)
-        
-        enable_man_btn = QPushButton("🔓 启用固定清单")
-        enable_man_btn.setToolTip("批量取消 setManifestid 的注释")
-        enable_man_btn.clicked.connect(self.toolEnableManifestRequested.emit)
-        
-        find_no_man_btn = QPushButton("👻 寻找无清单")
-        find_no_man_btn.setToolTip("扫描不含清单的 Lua 文件")
-        find_no_man_btn.clicked.connect(self.toolFindNoManifestRequested.emit)
-        
-        clean_lua_btn = QPushButton("🧹 清理无效Lua")
-        clean_lua_btn.setToolTip("删除只有基础 addappid 的无效 Lua 文件")
-        clean_lua_btn.clicked.connect(self.toolCleanInvalidLuaRequested.emit)
-        
-        fix_formats_btn = QPushButton("🪄 修复格式")
-        fix_formats_btn.setToolTip("优化 Lua 格式 (移除 None，修正标帜)")
-        fix_formats_btn.clicked.connect(self.toolFixFormatsRequested.emit)
-        
-        fetch_dlc_btn = QPushButton("📦 获取DLC")
-        fetch_dlc_btn.setToolTip("一键为所有游戏获取并添加 DLC")
-        fetch_dlc_btn.clicked.connect(self.fetchAllDlcRequested.emit)
-        
-        for btn in [get_names_btn, check_appid_btn, disable_man_btn, enable_man_btn, find_no_man_btn, clean_lua_btn, fix_formats_btn, fetch_dlc_btn]:
-
-            btn.setObjectName("tool_btn")
-            btn.setCursor(Qt.PointingHandCursor)
-            tools_layout.addWidget(btn)
-        
-        tools_layout.addStretch(1) # 右侧留白
-        main_layout.addLayout(tools_layout)
-        
-        # 第三行：搜索框
-        search_layout = QHBoxLayout()
-        search_layout.setSpacing(10)
-        
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 输入 AppID、游戏名称或 Steam 链接...")
-        self.search_input.returnPressed.connect(self._on_search)
-        search_layout.addWidget(self.search_input)
-        
-        main_layout.addLayout(search_layout)
         
         # 使用 QTableView 替代 QTableWidget
         self.game_table = QTableView()
@@ -319,29 +249,88 @@ class MainWindow(QMainWindow):
         """设置菜单栏"""
         menu_bar = self.menuBar()
         
-        # 文件菜单
-        file_menu = menu_bar.addMenu("文件")
-        
-        # 配置选项
+        # 设置菜单项
         config_action = QAction("设置", self)
         config_action.triggered.connect(self._on_config)
-        file_menu.addAction(config_action)
+        menu_bar.addAction(config_action)
         
-        # 分隔符
-        file_menu.addSeparator()
+        # 操作菜单
+        action_menu = menu_bar.addMenu("操作")
         
-        # 退出选项
-        exit_action = QAction("退出", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        check_unlock_action = QAction("检查解锁状态", self)
+        check_unlock_action.triggered.connect(self._on_check_unlock_status)
+        action_menu.addAction(check_unlock_action)
+        
+        update_list_action = QAction("拉取清单库", self)
+        update_list_action.triggered.connect(self._on_update_list)
+        action_menu.addAction(update_list_action)
+        
+        action_menu.addSeparator()
+        
+        batch_unlock_action = QAction("一键解锁", self)
+        batch_unlock_action.triggered.connect(self._on_batch_unlock)
+        action_menu.addAction(batch_unlock_action)
+        
+        batch_unlock_lite_action = QAction("一键解锁 Lite (仅Lua)", self)
+        batch_unlock_lite_action.triggered.connect(self._on_batch_unlock_lite)
+        action_menu.addAction(batch_unlock_lite_action)
+        
+        action_menu.addSeparator()
+        
+        get_names_action = QAction("批量获取游戏名称", self)
+        get_names_action.triggered.connect(self._on_fetch_game_names)
+        action_menu.addAction(get_names_action)
+        
+        # 工具菜单
+        tools_menu = menu_bar.addMenu("工具")
+        
+        check_appid_action = QAction("校验 Lua 参数", self)
+        check_appid_action.triggered.connect(self.toolCheckAddAppIDRequested.emit)
+        tools_menu.addAction(check_appid_action)
+        
+        fix_formats_action = QAction("修复 Lua 格式", self)
+        fix_formats_action.triggered.connect(self.toolFixFormatsRequested.emit)
+        tools_menu.addAction(fix_formats_action)
+        
+        clean_lua_action = QAction("清理无效 Lua", self)
+        clean_lua_action.triggered.connect(self.toolCleanInvalidLuaRequested.emit)
+        tools_menu.addAction(clean_lua_action)
+        
+        tools_menu.addSeparator()
+        
+        disable_manifest_action = QAction("批量禁用固定清单", self)
+        disable_manifest_action.triggered.connect(self.toolReplaceManifestRequested.emit)
+        tools_menu.addAction(disable_manifest_action)
+        
+        enable_manifest_action = QAction("批量启用固定清单", self)
+        enable_manifest_action.triggered.connect(self.toolEnableManifestRequested.emit)
+        tools_menu.addAction(enable_manifest_action)
+        
+        find_no_manifest_action = QAction("查找无清单游戏", self)
+        find_no_manifest_action.triggered.connect(self.toolFindNoManifestRequested.emit)
+        tools_menu.addAction(find_no_manifest_action)
+        
+        tools_menu.addSeparator()
+        
+        fetch_dlc_action = QAction("批量获取 DLC", self)
+        fetch_dlc_action.triggered.connect(self.fetchAllDlcRequested.emit)
+        tools_menu.addAction(fetch_dlc_action)
+        
+        complete_manifest_action = QAction("批量补全清单", self)
+        complete_manifest_action.triggered.connect(self.completeAllManifestsRequested.emit)
+        tools_menu.addAction(complete_manifest_action)
         
         # 帮助菜单
         help_menu = menu_bar.addMenu("帮助")
         
-        # 关于选项
         about_action = QAction("关于", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+        
+        # 退出菜单项（放在帮助后面）
+        exit_action = QAction("退出", self)
+        exit_action.triggered.connect(self.close)
+        menu_bar.addAction(exit_action)
     
     def _on_search(self):
         """处理搜索请求"""
@@ -440,6 +429,10 @@ class MainWindow(QMainWindow):
         """处理一键解锁请求"""
         self.batchUnlockRequested.emit()
     
+    def _on_batch_unlock_lite(self):
+        """处理一键解锁Lite请求（仅下载Lua，不下载清单）"""
+        self.batchUnlockLiteRequested.emit()
+    
     def _on_context_menu(self, position: QPoint):
         """处理右键菜单请求"""
         index = self.game_table.indexAt(position)
@@ -505,10 +498,10 @@ class MainWindow(QMainWindow):
         self.current_theme = theme_name
         if theme_name == "dark":
             self.setStyleSheet(self.DARK_STYLE)
-            self.theme_btn.setText("🌙")
+            self.theme_btn.setText("☽")
         else:
             self.setStyleSheet(self.LIGHT_STYLE)
-            self.theme_btn.setText("☀️")
+            self.theme_btn.setText("☀")
         self.game_model.set_theme(theme_name)
     
     @pyqtSlot(str)
@@ -519,7 +512,14 @@ class MainWindow(QMainWindow):
     @pyqtSlot(bool)
     def enable_buttons(self, enabled=True):
         """启用或禁用功能按钮"""
-        for i in range(1, 5):  # 除了搜索框外的按钮
-            widget = self.centralWidget().layout().itemAt(0).layout().itemAt(i).widget()
-            if widget:
-                widget.setEnabled(enabled) 
+        # 简化版：仅控制搜索框和刷新按钮的状态
+        # 由于按钮已移至菜单栏，此方法主要保持兼容性
+        try:
+            top_layout = self.centralWidget().layout().itemAt(0).layout()
+            if top_layout:
+                # 刷新按钮是第二个控件 (索引1)
+                widget = top_layout.itemAt(1)
+                if widget and widget.widget():
+                    widget.widget().setEnabled(enabled)
+        except (AttributeError, RuntimeError):
+            pass  # 布局未完全初始化时忽略

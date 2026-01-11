@@ -53,6 +53,8 @@ class UnlockController(QObject):
         self.view.toolCleanInvalidLuaRequested.connect(lambda: self.run_tool("clean_invalid_lua.py"))
         self.view.toolFixFormatsRequested.connect(lambda: self.run_tool("fix_lua_formats.py"))
         self.view.fetchAllDlcRequested.connect(self.fetch_all_dlc)
+        self.view.completeAllManifestsRequested.connect(self.complete_all_manifests)
+        self.view.batchUnlockLiteRequested.connect(self.batch_unlock_lite)
         
         # 连接菜单动作信号
         # 连接菜单动作信号
@@ -833,6 +835,176 @@ class UnlockController(QObject):
                 import traceback
                 traceback.print_exc()
                 self.toolCompleted.emit("批量获取DLC", error_msg, False)
+        
+        threading.Thread(target=run, daemon=True).start()
+
+    def complete_manifests(self, app_id: str):
+        """补全单个游戏的清单
+        
+        Args:
+            app_id: 游戏 App ID
+        """
+        steam_path = self.unlock_model.get_steam_path()
+        lua_dir = str(steam_path / "config" / "stplug-in")
+        depot_cache = str(steam_path / "config" / "depotcache")
+        
+        self.view.set_status(f"正在补全游戏 {app_id} 的清单...")
+        
+        def run():
+            try:
+                from complete_manifests import run_complete_single
+                
+                def progress_callback(msg):
+                    QTimer.singleShot(0, lambda m=msg: self.view.set_status(f"[清单] {m}"))
+                
+                result = run_complete_single(app_id, lua_dir, depot_cache, progress_callback)
+                
+                message = result.get("message", "完成")
+                self.toolCompleted.emit(f"补全清单 ({app_id})", message, result.get("success", False))
+                
+            except Exception as e:
+                error_msg = f"补全清单失败: {str(e)}"
+                import traceback
+                traceback.print_exc()
+                self.toolCompleted.emit(f"补全清单 ({app_id})", error_msg, False)
+        
+        threading.Thread(target=run, daemon=True).start()
+
+    def complete_all_manifests(self):
+        """批量补全所有游戏的清单"""
+        steam_path = self.unlock_model.get_steam_path()
+        lua_dir = str(steam_path / "config" / "stplug-in")
+        depot_cache = str(steam_path / "config" / "depotcache")
+        
+        # 确认操作
+        result = QMessageBox.question(
+            self.view,
+            "一键补全清单",
+            "将为所有已解锁的游戏补全缺失的 DLC 清单文件。\n\n"
+            "这可能需要较长时间，是否继续？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if result != QMessageBox.Yes:
+            return
+        
+        self.view.set_status("正在批量补全所有游戏的清单...")
+        
+        def run():
+            try:
+                from complete_manifests import run_complete_all
+                
+                def progress_callback(msg):
+                    QTimer.singleShot(0, lambda m=msg: self.view.set_status(f"[批量清单] {m}"))
+                
+                result = run_complete_all(lua_dir, depot_cache, progress_callback)
+                
+                message = result.get("message", "完成")
+                self.toolCompleted.emit("批量补全清单", message, result.get("success", False))
+                
+            except Exception as e:
+                error_msg = f"批量补全清单失败: {str(e)}"
+                import traceback
+                traceback.print_exc()
+                self.toolCompleted.emit("批量补全清单", error_msg, False)
+        
+        threading.Thread(target=run, daemon=True).start()
+
+    def batch_unlock_lite(self):
+        """批量解锁Lite - 仅下载Lua文件，不下载清单"""
+        # 确认操作
+        result = QMessageBox.question(
+            self.view,
+            "一键解锁 Lite",
+            "将批量解锁所有搜索结果中的游戏。\n\n"
+            "Lite 模式仅下载 Lua 脚本，不下载清单文件。\n"
+            "适用于快速解锁或网络较慢的情况。\n\n"
+            "是否继续？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if result != QMessageBox.Yes:
+            return
+        
+        # 获取所有未解锁的游戏
+        unlocked_ids = set()
+        for row in range(self.game_model.rowCount()):
+            game = self.game_model.get_game(row)
+            if game and not game.get("is_unlocked"):
+                unlocked_ids.add(game.get("app_id"))
+        
+        if not unlocked_ids:
+            QMessageBox.information(self.view, "提示", "没有需要解锁的游戏")
+            return
+        
+        self.view.set_status(f"正在批量解锁 Lite ({len(unlocked_ids)} 个游戏)...")
+        
+        def run():
+            import urllib.request
+            import urllib.error
+            import json
+            
+            steam_path = self.unlock_model.get_steam_path()
+            st_path = steam_path / "config" / "stplug-in"
+            st_path.mkdir(exist_ok=True)
+            
+            repo_path = "SteamAutoCracks/ManifestHub"
+            success_count = 0
+            fail_count = 0
+            
+            for i, app_id in enumerate(unlocked_ids):
+                try:
+                    QTimer.singleShot(0, lambda a=app_id, n=i: self.view.set_status(
+                        f"[Lite] {n+1}/{len(unlocked_ids)} 正在处理 {a}..."))
+                    
+                    # 只下载 Lua 文件
+                    lua_url = f"https://raw.githubusercontent.com/{repo_path}/{app_id}/{app_id}.lua"
+                    lua_path = st_path / f"{app_id}.lua"
+                    
+                    req = urllib.request.Request(lua_url, headers={"User-Agent": "SteamUnlocker/2.3"})
+                    with urllib.request.urlopen(req, timeout=30) as response:
+                        content = response.read()
+                        with open(str(lua_path), 'wb') as f:
+                            f.write(content)
+                        success_count += 1
+                        
+                except Exception as e:
+                    fail_count += 1
+                    print(f"Lite 解锁 {app_id} 失败: {e}")
+            
+            message = f"Lite 解锁完成！成功 {success_count} 个，失败 {fail_count} 个"
+            self.toolCompleted.emit("批量解锁 Lite", message, success_count > 0)
+        
+        threading.Thread(target=run, daemon=True).start()
+
+    def update_lua_from_remote(self, app_id: str):
+        """从远程更新单个游戏的 Lua 文件"""
+        self.view.set_status(f"正在更新 {app_id} 的 Lua 文件...")
+        
+        def run():
+            import urllib.request
+            import urllib.error
+            
+            try:
+                steam_path = self.unlock_model.get_steam_path()
+                st_path = steam_path / "config" / "stplug-in"
+                st_path.mkdir(exist_ok=True)
+                
+                repo_path = "SteamAutoCracks/ManifestHub"
+                lua_url = f"https://raw.githubusercontent.com/{repo_path}/{app_id}/{app_id}.lua"
+                lua_path = st_path / f"{app_id}.lua"
+                
+                req = urllib.request.Request(lua_url, headers={"User-Agent": "SteamUnlocker/2.3"})
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    content = response.read()
+                    with open(str(lua_path), 'wb') as f:
+                        f.write(content)
+                
+                self.toolCompleted.emit(f"更新Lua ({app_id})", f"成功更新 {app_id}.lua", True)
+                
+            except Exception as e:
+                error_msg = f"更新 Lua 失败: {str(e)}"
+                self.toolCompleted.emit(f"更新Lua ({app_id})", error_msg, False)
         
         threading.Thread(target=run, daemon=True).start()
  

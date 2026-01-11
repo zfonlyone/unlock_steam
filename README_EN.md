@@ -11,7 +11,7 @@ A powerful tool for managing and unlocking Steam games. It retrieves game manife
 
 ## Version Information
 
-- **Current Version**: v2.3.0
+- **Current Version**: v2.4.0
 - **Author**: zfonlyone
 - **License**: GPL-3.0
 - **Project Home**: [GitHub](https://github.com/zfonlyone/unlock_steam)

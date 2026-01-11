@@ -66,25 +66,35 @@ class MenuManager(QObject):
         if is_unlocked:
             context_menu.addSeparator()
             
+            # 更新 Lua 文件（从远程重新下载）
+            update_lua_action = QAction("更新Lua文件", self.view)
+            update_lua_action.triggered.connect(lambda: self.unlock_controller.update_lua_from_remote(app_id))
+            context_menu.addAction(update_lua_action)
+            
             # 单个游戏的固定清单管理
-            disable_man_single_action = QAction("🔒 禁用固定清单", self.view)
+            disable_man_single_action = QAction("禁用固定清单", self.view)
             disable_man_single_action.triggered.connect(lambda: self.unlock_controller.toggle_single_manifest(app_id, False))
             context_menu.addAction(disable_man_single_action)
             
-            enable_man_single_action = QAction("🔓 启用固定清单", self.view)
+            enable_man_single_action = QAction("启用固定清单", self.view)
             enable_man_single_action.triggered.connect(lambda: self.unlock_controller.toggle_single_manifest(app_id, True))
             context_menu.addAction(enable_man_single_action)
 
             # 更新清单 (API) - 仅限未禁用的
             if is_unlocked != "disabled":
-                update_man_action = QAction("🔄 更新清单 (API)", self.view)
+                update_man_action = QAction("更新清单 (API)", self.view)
                 update_man_action.triggered.connect(lambda: self.view.updateManifestRequested.emit(game_data))
                 context_menu.addAction(update_man_action)
             
             # 获取并添加 DLC
-            fetch_dlc_action = QAction("📦 获取并添加 DLC", self.view)
+            fetch_dlc_action = QAction("获取并添加 DLC", self.view)
             fetch_dlc_action.triggered.connect(lambda: self.unlock_controller.fetch_and_add_dlc(app_id))
             context_menu.addAction(fetch_dlc_action)
+            
+            # 补全清单
+            complete_manifest_action = QAction("补全清单", self.view)
+            complete_manifest_action.triggered.connect(lambda: self.unlock_controller.complete_manifests(app_id))
+            context_menu.addAction(complete_manifest_action)
         
         
         # 添加分隔线

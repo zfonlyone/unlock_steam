@@ -23,7 +23,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 项目版本信息
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 BUILD_DATE = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 AUTHOR = "zfonlyone"
 COPYRIGHT = f"Copyright © {datetime.now().year} zfonlyone. All rights reserved."
@@ -288,6 +288,7 @@ VSVersionInfo(
         ("tools/recover_manifests_from_lua.py", "tools"),
         ("tools/fix_lua_formats.py", "tools"),
         ("tools/fetch_dlc.py", "tools"),
+        ("tools/complete_manifests.py", "tools"),
     ]
 
     for src, dst in data_files:

@@ -56,12 +56,22 @@ jobs:
           cd tools/downloader
           go build -ldflags "-s -w" -o ../../downloader.exe main.go
 
-      - name: Update version in build script
+      - name: Update version in build script and project info
         run: |
           $version = "${{ needs.check-version.outputs.version }}"
           $versionNum = $version -replace '^v', ''
+          
+          # Update scripts/build.py
           (Get-Content scripts/build.py) -replace 'VERSION = "[^"]*"', "VERSION = `"$versionNum`"" | Set-Content scripts/build.py
-          Write-Host "Updated VERSION to $versionNum"
+          Write-Host "Updated scripts/build.py VERSION to $versionNum"
+          
+          # Update models/project_info.py
+          (Get-Content models/project_info.py) -replace '"version": "[^"]*"', "`"version`": `"$versionNum`"" | Set-Content models/project_info.py
+          Write-Host "Updated models/project_info.py version to $versionNum"
+          
+          # Update views/main_window.py window title
+          (Get-Content views/main_window.py) -replace 'v[0-9]+\.[0-9]+\.[0-9]+', "v$versionNum" | Set-Content views/main_window.py
+          Write-Host "Updated views/main_window.py window title to v$versionNum"
         shell: pwsh
 
       - name: Build main application
