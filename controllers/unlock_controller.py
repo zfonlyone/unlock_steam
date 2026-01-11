@@ -2,7 +2,8 @@ import os
 import sys
 import asyncio
 from PyQt5.QtWidgets import QMenu, QAction, QMessageBox, QDialog, QProgressDialog, QInputDialog
-from PyQt5.QtCore import QPoint, QObject, pyqtSignal, QTimer
+from PyQt5.QtCore import QPoint, QObject, pyqtSignal, QTimer, Qt
+from views.progress_dialog import ProgressDialog
 from typing import List, Dict, Any, Optional, Tuple
 from PyQt5.QtWidgets import QApplication
 import threading
@@ -911,14 +912,14 @@ class UnlockController(QObject):
         threading.Thread(target=run, daemon=True).start()
 
     def batch_unlock_lite(self):
-        """批量解锁Lite - 仅下载Lua文件，不下载清单"""
+        """批量解锁Lite - 使用 Go 下载器仅下载 Lua 文件"""
         # 确认操作
         result = QMessageBox.question(
             self.view,
             "一键解锁 Lite",
             "将批量解锁所有搜索结果中的游戏。\n\n"
             "Lite 模式仅下载 Lua 脚本，不下载清单文件。\n"
-            "适用于快速解锁或网络较慢的情况。\n\n"
+            "使用 Go 高速下载器，速度更快。\n\n"
             "是否继续？",
             QMessageBox.Yes | QMessageBox.No
         )
@@ -927,11 +928,11 @@ class UnlockController(QObject):
             return
         
         # 获取所有未解锁的游戏
-        unlocked_ids = set()
-        for row in range(self.game_model.rowCount()):
-            game = self.game_model.get_game(row)
+        unlocked_ids = []
+        for row in range(self.view.game_model.rowCount()):
+            game = self.view.game_model.get_game(row)
             if game and not game.get("is_unlocked"):
-                unlocked_ids.add(game.get("app_id"))
+                unlocked_ids.append(str(game.get("app_id")))
         
         if not unlocked_ids:
             QMessageBox.information(self.view, "提示", "没有需要解锁的游戏")
@@ -939,41 +940,178 @@ class UnlockController(QObject):
         
         self.view.set_status(f"正在批量解锁 Lite ({len(unlocked_ids)} 个游戏)...")
         
+        total = len(unlocked_ids)
+        print(f"\n{'='*60}")
+        print(f"🚀 批量解锁 Lite 开始，总计 {total} 个游戏 (Go 下载器)")
+        print(f"{'='*60}\n")
+        
+        # 创建非阻塞进度弹窗
+        progress_dlg = ProgressDialog(self.view, "批量解锁 Lite")
+        progress_dlg.start(total, f"正在下载 {total} 个游戏的 Lua 文件...")
+        
         def run():
-            import urllib.request
-            import urllib.error
+            import subprocess
             import json
+            import tempfile
+            import time
+            import sys
+            from pathlib import Path
+            
+            start_time = time.time()
             
             steam_path = self.unlock_model.get_steam_path()
-            st_path = steam_path / "config" / "stplug-in"
-            st_path.mkdir(exist_ok=True)
+            lua_dir = str(steam_path / "config" / "stplug-in")
             
-            repo_path = "SteamAutoCracks/ManifestHub"
-            success_count = 0
-            fail_count = 0
+            # 确保目录存在
+            Path(lua_dir).mkdir(parents=True, exist_ok=True)
             
-            for i, app_id in enumerate(unlocked_ids):
+            # 查找 Go 下载器
+            possible_paths = [
+                Path(__file__).parent.parent / "downloader.exe",
+                Path(sys.executable).parent / "downloader.exe",
+                Path(__file__).parent.parent / "tools" / "downloader" / "downloader.exe",
+            ]
+            
+            go_binary = None
+            for p in possible_paths:
+                if p.exists():
+                    go_binary = p
+                    break
+            
+            if not go_binary:
+                print("❌ 未找到 Go 下载器，回退到 Python 模式")
+                self.toolCompleted.emit("批量解锁 Lite", "未找到 Go 下载器 (downloader.exe)", False)
+                return
+            
+            print(f"使用 Go 下载器: {go_binary}")
+            
+            # 准备配置 - 只下载 Lua，不下载清单
+            config_dict = {
+                "token": self.config_model.get("github_token", ""),
+                "repo": "SteamAutoCracks/ManifestHub",
+                "app_ids": unlocked_ids,
+                "app_data": {},  # 空的，不下载清单
+                "lua_dir": lua_dir,
+                "manifest_dir": "",  # 空的，不下载清单
+                "direct_mode": True,
+                "manifest_only": False
+            }
+            
+            # 写入临时配置文件
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as tmp:
+                json.dump(config_dict, tmp)
+                temp_config_path = tmp.name
+            
+            try:
+                # 启动 Go 下载器
+                process = subprocess.Popen(
+                    [str(go_binary), "-config", temp_config_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=False
+                )
+                
+                last_json_line = ""
+                
+                # 实时读取输出
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
+                    
+                    line_str = line.decode('utf-8', errors='ignore').strip()
+                    if not line_str:
+                        continue
+                    
+                    # 解析 JSON 结果
+                    if line_str.startswith('{') and '"results"' in line_str:
+                        last_json_line = line_str
+                        continue
+                    
+                    # 显示进度
+                    if "[PROGRESS]" in line_str:
+                        try:
+                            p_str = line_str.split("]")[-1].strip()
+                            curr, total_num = map(int, p_str.split("/"))
+                            percent = int(curr / total_num * 100)
+                            status_msg = f"[Lite] {curr}/{total_num} ({percent}%)"
+                            QTimer.singleShot(0, lambda m=status_msg: self.view.set_status(m))
+                            
+                            # 更新进度弹窗
+                            progress_dlg.progressUpdated.emit(curr, total_num, f"正在下载: {curr}/{total_num}")
+                            
+                            bar_width = 40
+                            filled = int(bar_width * curr / total_num)
+                            bar = "█" * filled + "░" * (bar_width - filled)
+                            elapsed = time.time() - start_time
+                            speed = curr / elapsed if elapsed > 0 else 0
+                            print(f"\r[{bar}] {percent:3d}% | {curr}/{total_num} | {speed:.1f}/s", end="", flush=True)
+                        except:
+                            pass
+                    elif "[INFO]" in line_str:
+                        print(line_str)
+                        progress_dlg.logAppended.emit(line_str)
+                
+                process.wait()
+                
+                # 解析结果
+                success_count = 0
+                fail_count = 0
+                failed_ids = []  # [(app_id, error_msg), ...]
+                
+                if process.returncode == 0 and last_json_line:
+                    try:
+                        result_json = json.loads(last_json_line)
+                        for r in result_json.get("results", []):
+                            if r.get("lua", 0) > 0:
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                                app_id = r.get("app_id", "unknown")
+                                error = r.get("error", "无 Lua 文件")
+                                failed_ids.append((app_id, error))
+                    except:
+                        fail_count = len(unlocked_ids)
+                        failed_ids = [(x, "解析失败") for x in unlocked_ids]
+                else:
+                    fail_count = len(unlocked_ids)
+                    failed_ids = [(x, "下载器异常") for x in unlocked_ids]
+                
+                elapsed = time.time() - start_time
+                
+                # 显示失败的 AppID 和原因
+                if failed_ids:
+                    fail_log = f"失败的 AppID ({len(failed_ids)} 个):\n"
+                    for i, (app_id, error) in enumerate(failed_ids[:30]):
+                        fail_log += f"  {app_id}: {error}\n"
+                    if len(failed_ids) > 30:
+                        fail_log += f"  ... 及其他 {len(failed_ids) - 30} 个"
+                    progress_dlg.logAppended.emit(fail_log)
+                    print(f"\n失败的 AppID:")
+                
+                print(f"\n\n{'='*60}")
+                print(f"✅ Lite 解锁完成！")
+                print(f"   📊 成功: {success_count} | 失败: {fail_count} | 总计: {total}")
+                print(f"   ⏱️  耗时: {elapsed:.1f} 秒 ({total/elapsed:.1f} 游戏/秒)" if elapsed > 0 else "")
+                print(f"{'='*60}\n")
+                
+                message = f"Lite 解锁完成！成功 {success_count} 个，失败 {fail_count} 个，耗时 {elapsed:.1f} 秒"
+                
+                # 更新统计和完成状态
+                progress_dlg.update_stats(success_count, fail_count)
+                progress_dlg.finished.emit(success_count > 0, message)
+                
+                self.toolCompleted.emit("批量解锁 Lite", message, success_count > 0)
+                
+            finally:
+                # 清理临时文件
                 try:
-                    QTimer.singleShot(0, lambda a=app_id, n=i: self.view.set_status(
-                        f"[Lite] {n+1}/{len(unlocked_ids)} 正在处理 {a}..."))
-                    
-                    # 只下载 Lua 文件
-                    lua_url = f"https://raw.githubusercontent.com/{repo_path}/{app_id}/{app_id}.lua"
-                    lua_path = st_path / f"{app_id}.lua"
-                    
-                    req = urllib.request.Request(lua_url, headers={"User-Agent": "SteamUnlocker/2.3"})
-                    with urllib.request.urlopen(req, timeout=30) as response:
-                        content = response.read()
-                        with open(str(lua_path), 'wb') as f:
-                            f.write(content)
-                        success_count += 1
-                        
-                except Exception as e:
-                    fail_count += 1
-                    print(f"Lite 解锁 {app_id} 失败: {e}")
+                    Path(temp_config_path).unlink()
+                except:
+                    pass
             
-            message = f"Lite 解锁完成！成功 {success_count} 个，失败 {fail_count} 个"
-            self.toolCompleted.emit("批量解锁 Lite", message, success_count > 0)
+            # 刷新界面
+            QTimer.singleShot(0, self.view.refreshDisplayRequested.emit)
         
         threading.Thread(target=run, daemon=True).start()
 

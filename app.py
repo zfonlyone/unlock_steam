@@ -12,6 +12,7 @@ from models import DataManager, UnlockModel, GitModel, ConfigModel
 from models.steam_api_model import SteamApiModel
 from models.project_info import project_info
 from views import MainWindow, ConfigDialog
+from views.progress_dialog import ProgressDialog
 from controllers import SearchController, UnlockController, GitController, SteamApiController
 from controllers.menu_manager import MenuManager
 
@@ -319,6 +320,10 @@ class App:
         print(f"{'='*60}\n")
         QTimer.singleShot(0, lambda: self.main_window.set_status(f"准备并发解锁 {total_games} 个游戏..."))
         
+        # 创建非阻塞进度弹窗
+        self._progress_dialog = ProgressDialog(self.main_window, "一键解锁")
+        self._progress_dialog.start(total_games, f"正在解锁 {total_games} 个游戏...")
+        
         # 进度条状态
         self._progress_state = {"last_percent": -1, "start_time": time.time()}
         
@@ -350,6 +355,11 @@ class App:
             def progress_callback(msg, percent):
                 self.unlock_controller.progressUpdated.emit(msg, percent)
                 print_progress_bar(percent, msg)
+                
+                # 更新进度弹窗
+                if percent >= 0:
+                    completed = int(total_games * percent / 100)
+                    self._progress_dialog.progressUpdated.emit(completed, total_games, msg[:80])
             
             # 从外部模型构建 AppID -> ManifestIDs 的映射
             # 这样 Go 下载器就不需要通过 API 就能知道要下哪些清单了
@@ -376,11 +386,24 @@ class App:
             fail_count = len(results) - success_count
             elapsed = time.time() - self._progress_state["start_time"]
             
+            # 收集失败的 AppID 和原因
+            failed_ids = [(app_id, message) for app_id, (success, message) in results.items() if not success]
+            
             # 更新数据库中的解锁状态
             for app_id, (success, message) in results.items():
                 if success:
                     self.data_manager.set_unlock_status(app_id, True, auto_save=False)
             self.data_manager.save_to_json()  # 批量保存
+            
+            # 显示失败的 AppID 和原因
+            if failed_ids:
+                fail_log = f"失败的 AppID ({len(failed_ids)} 个):\n"
+                for app_id, error in failed_ids[:30]:
+                    fail_log += f"  {app_id}: {error}\n"
+                if len(failed_ids) > 30:
+                    fail_log += f"  ... 及其他 {len(failed_ids) - 30} 个"
+                self._progress_dialog.logAppended.emit(fail_log)
+                print(f"\n失败的 AppID:")
             
             # 显示最终结果
             print(f"\n{'='*60}")
@@ -389,6 +412,11 @@ class App:
             print(f"   ⏱️  耗时: {elapsed:.1f} 秒 ({total_games/elapsed:.1f} 游戏/秒)" if elapsed > 0 else "")
             print(f"{'='*60}\n")
             
+            # 更新进度弹窗
+            final_msg = f"解锁完成！成功 {success_count} 个，失败 {fail_count} 个，耗时 {elapsed:.1f} 秒"
+            self._progress_dialog.update_stats(success_count, fail_count)
+            self._progress_dialog.finished.emit(success_count > 0, final_msg)
+            
             self.unlock_controller.batchUnlockCompleted.emit(success_count, fail_count, total_games, elapsed)
             
         except Exception as e:
@@ -396,6 +424,10 @@ class App:
             print(f"\n❌ {error_msg}")
             import traceback
             traceback.print_exc()
+            
+            # 更新进度弹窗显示错误
+            self._progress_dialog.finished.emit(False, error_msg)
+            
             self.unlock_controller.batchUnlockCompleted.emit(0, 0, 0, -1.0) # 发送错误信号
             QTimer.singleShot(0, lambda: self.main_window.set_status(f"出错: {error_msg}"))
         finally:
